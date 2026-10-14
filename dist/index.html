@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c0e12">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="description" content="Compare YouTube, Twitch VODs, X, and local gaming videos side by side. Link playback, align start points, and review the details with Splitframe.">
+  <title>Splitframe — Every frame counts.</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h4v14H7zm7 0h4v14h-4z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-6 6-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m2 2 2-2a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0" transform="translate(2 1) scale(.9)"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24"><path d="M14 4h6v6m0-6L10 14m0-10H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7z"/><path d="M3 8h18"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4m0 3h.01"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4zm13-1a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-frame-left" viewBox="0 0 24 24"><path d="M6 5v14m12-14L9 12l9 7z"/></symbol>
+    <symbol id="i-frame-right" viewBox="0 0 24 24"><path d="M18 5v14M6 5l9 7-9 7z"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></symbol>
+  </defs></svg>
+  <a class="skip" href="#comparison">Skip to comparison</a>
+  <header class="header">
+    <div class="header-inner">
+      <a class="brand" href="./" aria-label="Splitframe home"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 6h8v20H4zM17 6l12 10-12 10z" fill="currentColor"/></svg><span>SPLITFRAME<span class="brand-dot">.</span></span></a>
+      <nav class="header-nav" aria-label="Main"><span class="nav-current">Compare <span class="tiny-dot"></span></span><a href="#guide" id="help-link"><svg class="icon"><use href="#i-help"/></svg>Quick guide</a></nav>
+      <button class="button quiet new-session" id="new-session" type="button" disabled><svg class="icon"><use href="#i-reset"/></svg>New session</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="intro" aria-labelledby="headline">
+      <div><div class="eyebrow"><span></span> THE SPEEDRUN COMPARISON TOOL</div><h1 id="headline">Every frame <em>counts.</em></h1><p>Two runs. One view. Find your next personal best.</p></div>
+      <div class="intro-aside"><span class="platform-pill"><span class="youtube-mark">▶</span>YouTube<span class="pill-divider"></span><svg class="twitch-mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 2 2 6v15h5v3l4-3h4l7-7V2H4zm16 11-4 4h-5l-3 3v-3H5V4h15v9zM16 7h2v6h-2zm-5 0h2v6h-2z"/></svg>Twitch<span class="pill-divider"></span><b class="x-mark">𝕏</b></span><span class="save-note" id="save-note">Paste a link or choose a local video.</span></div>
+    </section>
+
+    <section id="comparison" aria-label="Video comparison workspace">
+      <div class="workspace-heading"><h2><svg class="icon"><use href="#i-link"/></svg>Comparison workspace</h2><span id="workspace-status">0 / 2 videos loaded</span></div>
+      <div class="players-grid" id="players-grid"></div>
+
+      <section class="transport" aria-label="Shared playback controls">
+        <div class="transport-actions"><button class="button primary play-both" id="play-both" type="button" disabled><svg class="icon"><use href="#i-play"/></svg><span>Play both</span><kbd>SPACE</kbd></button><button class="button reset-both" id="reset-both" type="button" disabled title="Pause both videos and return to their saved start points"><svg class="icon"><use href="#i-reset"/></svg><span>Reset</span></button></div>
+        <div class="linked-status"><span class="link-badge"><svg class="icon"><use href="#i-link"/></svg></span><div><strong id="transport-title">Ready when you are</strong><span id="transport-note">Load two videos to link playback.</span></div></div>
+        <fieldset class="audio-switch"><legend><svg class="icon"><use href="#i-volume"/></svg>Audio source</legend><div class="segmented"><label><input type="radio" name="audio" value="mute" checked><span>Mute</span></label><label><input type="radio" name="audio" value="a"><span>Run A</span></label><label><input type="radio" name="audio" value="b"><span>Run B</span></label><label><input type="radio" name="audio" value="both"><span>Both</span></label></div></fieldset>
+      </section>
+      <div class="workspace-footnote"><span><span class="tiny-dot"></span> Shared commands · independent start points</span><span>Streaming delays can affect sync. Frame steps are approximate.</span></div>
+    </section>
+
+    <details class="guide" id="guide">
+      <summary><span><svg class="icon"><use href="#i-help"/></svg>First comparison? <strong>Here’s the 20-second setup.</strong></span><svg class="icon chevron"><use href="#i-chevron"/></svg></summary>
+      <div class="guide-body"><div class="guide-steps"><div><span class="step-number">01</span><h3>Bring your runs</h3><p>Paste a YouTube, Twitch VOD, or X video link and press <b>Load</b>, or click <b>Choose video</b> to open a local file. Mix sources on either side. Both begin muted.</p></div><div><span class="step-number">02</span><h3>Line up the start</h3><p>Set each start point to the same gameplay moment. Use ± seconds for big moves and ±1 frame for small adjustments. Select the video’s FPS.</p></div><div><span class="step-number">03</span><h3>Spot the difference</h3><p>Use the play button or <kbd>Space</kbd>. <b>Reset</b> or <kbd>R</kbd> returns supported videos to their saved starts. The toolbar controls one supported video or both together. After clicking inside an embedded player, click outside it to use these shortcuts.</p></div></div>
+      <div class="support-table-wrap"><table class="support-table"><caption>What each source supports</caption><thead><tr><th scope="col">Video source</th><th scope="col">Play / pause both</th><th scope="col">Start points & reset</th><th scope="col">Speed selector</th></tr></thead><tbody><tr><th scope="row">Local video file</th><td>Supported</td><td>Supported</td><td>0.25–2×</td></tr><tr><th scope="row">YouTube video</th><td>Supported</td><td>Supported</td><td>Available speeds</td></tr><tr><th scope="row">Twitch VOD</th><td>Supported</td><td>Supported</td><td>In-player controls only</td></tr><tr><th scope="row">Twitch clip</th><td>Own player controls</td><td>Not available</td><td>Own player controls</td></tr><tr><th scope="row">X post link</th><td>Own player controls</td><td>Not available</td><td>Own player controls</td></tr><tr><th scope="row">X direct MP4 link</th><td>Supported</td><td>Supported</td><td>0.25–2×</td></tr></tbody></table></div>
+      <div class="guide-notes"><p>Start points range from <b>0:00 to 10:00</b>; the rest of a long video is still playable. One frame means 1 ÷ your selected FPS in seconds. Embedded players may seek to nearby frames, so this is a review tool, not an exact run timer.</p><p>Ads, buffering, or different speeds can put videos out of step. For repeatable comparisons, use two recorded videos at the same speed and reset after buffering. Some videos are private, deleted, age restricted, subscriber only, or blocked from embedding by their owner.</p><p>Twitch live streams aren’t supported. Twitch clips and X posts use their own embedded controls; they don’t disable the toolbar for the other video. Use Twitch VODs, an X direct video.twimg.com MP4 link, or local files for linked playback. If Twitch does not start, click Play inside its player once, then retry the toolbar. Your settings are saved only in this browser. Local files play directly from your device and are never uploaded. After refreshing, choose those files again; their starting points and FPS are saved. Video formats and codecs must be supported by your browser. Online videos connect to their original platforms when loaded.</p><p class="documentation">Platform details: <a href="https://developers.google.com/youtube/iframe_api_reference" target="_blank" rel="noopener noreferrer">YouTube player support <span aria-hidden="true">↗</span></a><a href="https://dev.twitch.tv/docs/embed/video-and-clips/" target="_blank" rel="noopener noreferrer">Twitch player support <span aria-hidden="true">↗</span></a><a href="https://docs.x.com/x-for-websites/embedded-posts/overview" target="_blank" rel="noopener noreferrer">X player support <span aria-hidden="true">↗</span></a></p></div></div>
+    </details>
+    <footer><span class="footer-wordmark">SPLITFRAME.</span><span>Built for the next PB.</span><span class="footer-shortcuts"><kbd>SPACE</kbd> play / pause <span>·</span><kbd>R</kbd> reset</span></footer>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <noscript><div class="noscript">Please enable JavaScript to load videos and use the comparison controls.</div></noscript>
+
+  <template id="player-template">
+    <article class="player-card">
+      <div class="card-top"><div class="run-identity"><span class="run-letter"></span><div><h3 class="run-title"></h3><span class="run-subtitle"></span></div></div><span class="player-state"><span class="tiny-dot"></span><span class="state-text">Waiting for video</span></span></div>
+      <form class="source-form" novalidate><label class="sr-only source-label">Video link</label><div class="url-field"><svg class="icon"><use href="#i-link"/></svg><input class="url-input" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="YouTube, Twitch VOD, or X video link…" required></div><button class="button load-button" type="submit">Load<svg class="icon"><use href="#i-arrow"/></svg></button></form>
+      <p class="input-error" role="alert" hidden></p>
+      <div class="local-file-row"><span class="source-separator">OR</span><button class="button choose-file" type="button" data-native-space="true"><svg class="icon"><use href="#i-folder"/></svg>Choose video</button><span class="file-name" title="Local videos play on your device and are never uploaded.">Stays on your device</span><input class="file-input" type="file" accept="video/*,.mp4,.webm,.mov,.m4v,.ogv,.mkv,.avi" hidden></div>
+      <p class="input-error file-error" role="alert" hidden></p>
+      <div class="video-shell"><div class="empty-player"><div class="empty-grid"></div><span class="empty-corner corner-top"></span><span class="empty-corner corner-bottom"></span><div class="empty-play-icon"><svg class="icon"><use href="#i-play"/></svg></div><strong class="empty-title"></strong><p class="empty-description">Paste your link above to get started</p><div class="empty-platforms"><span>YouTube</span><span>+</span><span>Twitch VOD</span><span>+</span><span>X</span></div><span class="empty-watermark" aria-hidden="true"></span></div><div class="embed-mount" hidden></div></div>
+      <div class="video-meta"><span class="source-type">NO VIDEO LOADED</span><span class="playhead"><svg class="icon"><use href="#i-play"/></svg><output class="current-time">00:00.000</output><span class="duration">/ --:--</span></span><a class="open-source" target="_blank" rel="noopener" hidden title="Open the original video"><svg class="icon"><use href="#i-out"/></svg><span class="sr-only">Open original video</span></a></div>
+      <div class="player-message" role="status" hidden></div>
+      <p class="narrow-twitch-note" hidden>Twitch needs a wider player. Swipe inside the video on narrow screens.</p>
+      <div class="alignment">
+        <div class="section-label"><span><svg class="icon"><use href="#i-target"/></svg>START POINT</span><button class="text-button use-current" type="button" disabled>Use current time</button></div>
+        <div class="start-row"><label class="timestamp-label"><span class="sr-only">Starting timestamp</span><input class="start-time" value="00:00.000" inputmode="decimal" spellcheck="false" autocomplete="off" aria-label="Starting timestamp, minutes and seconds"></label><span class="time-unit">MIN : SEC . MS</span><button class="button zero-start" type="button" title="Set this start point to zero" aria-label="Set start point to zero"><svg class="icon"><use href="#i-reset"/></svg></button></div>
+        <div class="frame-row"><div class="frame-buttons"><button class="button frame-step" data-frame="-1" type="button"><svg class="icon"><use href="#i-frame-left"/></svg>−1 frame</button><button class="button frame-step" data-frame="1" type="button">+1 frame<svg class="icon"><use href="#i-frame-right"/></svg></button></div><label class="fps-label"><select class="fps-select" aria-label="Video frame rate"><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="30">30 FPS</option><option value="50">50 FPS</option><option value="60" selected>60 FPS</option><option value="120">120 FPS</option></select></label></div>
+        <div class="second-buttons" role="group" aria-label="Adjust start by seconds"><button type="button" class="button" data-seconds="-10">−10s</button><button type="button" class="button" data-seconds="-5">−5s</button><button type="button" class="button" data-seconds="-1">−1s</button><button type="button" class="button" data-seconds="1">+1s</button><button type="button" class="button" data-seconds="5">+5s</button><button type="button" class="button" data-seconds="10">+10s</button></div>
+        <div class="range-wrap"><input class="start-range" type="range" min="0" max="600" step="0.001" value="0" aria-label="Start point from zero to ten minutes"><div class="range-labels" aria-hidden="true"><span>0:00</span><span>2:00</span><span>4:00</span><span>6:00</span><span>8:00</span><span>10:00</span></div></div>
+        <div class="speed-row"><label><span class="speed-symbol" aria-hidden="true">↗</span>Playback speed<select class="speed-select" aria-label="Playback speed" disabled><option value="1">1×</option></select></label><span class="speed-note">Load a video to begin</span></div>
+      </div>
+    </article>
+  </template>
+</body>
+</html>
