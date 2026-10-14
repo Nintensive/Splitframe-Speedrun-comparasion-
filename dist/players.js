@@ -152,7 +152,7 @@ export function createLocalPlayer(mount, file, options = {}) {
   return createMediaPlayer(mount, objectUrl, { ...options, label: `Local video: ${file.name}`, local: true, release: () => URL.revokeObjectURL(objectUrl) });
 }
 
-export async function createPlayer(mount, source, { start = 0, file, onState = () => {}, onError = () => {}, onRate = () => {}, onMount = () => {} } = {}) {
+export async function createPlayer(mount, source, { start = 0, file, onState = () => {}, onError = () => {}, onRate = () => {}, onMount = () => {}, onMutedFallback = () => {} } = {}) {
   if (source.kind === 'local') return createLocalPlayer(mount, file, { onState, onError, onRate, onMount });
   if (source.kind === 'x-video') return createMediaPlayer(mount, source.url, { label: 'X MP4 video player', onState, onError, onRate, onMount });
   let disposed = false;
@@ -198,21 +198,24 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
   await sdk(source.kind === 'youtube' ? 'youtube' : 'twitch');
   // A replacement load may have removed this mount while the SDK was loading.
   if (!inner.isConnected) throw new Error('Video load was replaced.');
-  let readyResolve, readyReject, settled = false;
+  let readyResolve, readyReject, readyCheck, settled = false;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
   // Avoid unhandled rejections if a SDK constructor throws before the adapter is returned.
   ready.catch(() => {});
   const timeout = setTimeout(() => {
+    clearInterval(readyCheck);
     if (!settled && !disposed) { settled = true; readyReject(new Error('The player didn’t become ready. Check the video’s availability, connection, or content blocker, then press Load again.')); }
   }, 25000);
   const complete = () => {
     if (disposed || settled) return;
     settled = true;
     clearTimeout(timeout);
+    clearInterval(readyCheck);
     readyResolve();
   };
   const fail = message => {
     clearTimeout(timeout);
+    clearInterval(readyCheck);
     if (!settled) { settled = true; readyReject(new Error(message)); }
     emit(onError, message);
   };
@@ -265,8 +268,8 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
     const event = window.Twitch.Player[name];
     if (event) player.addEventListener(event, data => { if (!disposed) callback(data); });
   };
-  let playTimeout;
-  const clearPlayTimeout = () => clearTimeout(playTimeout);
+  let readyEventSeen = false, muted = true, playRequested = false, playAcknowledged = false, attemptedWithSound = false, retriedMuted = false, playRetry;
+  const clearPlayRetry = () => clearTimeout(playRetry);
   const prepareFrame = () => {
     const iframe = inner.querySelector?.('iframe');
     if (!iframe) return;
@@ -275,33 +278,80 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
     iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
   };
   prepareFrame();
-  listen('READY', complete);
-  listen('VIDEO_READY', complete);
-  listen('PLAY', () => emit(onState, 'buffering'));
-  listen('PLAYING', () => { clearPlayTimeout(); emit(onState, 'playing'); });
+  // The SDK can signal READY before its cached VOD metadata arrives. Wait for
+  // that snapshot so initialization seeks and the first play command are usable.
+  const checkReady = () => {
+    if (disposed || settled || !readyEventSeen) return;
+    try { if (player.getDuration() > 0) complete(); } catch { /* Metadata is still arriving. */ }
+  };
+  const playerReady = () => { readyEventSeen = true; checkReady(); };
+  listen('READY', playerReady);
+  listen('VIDEO_READY', playerReady);
+  readyCheck = setInterval(checkReady, 100);
+  const acknowledgePlay = state => {
+    playAcknowledged = true;
+    clearPlayRetry();
+    emit(onState, state);
+  };
+  listen('PLAY', () => acknowledgePlay('buffering'));
+  listen('PLAYING', () => acknowledgePlay('playing'));
   listen('PAUSE', () => emit(onState, 'paused'));
-  listen('ENDED', () => { clearPlayTimeout(); emit(onState, 'ended'); });
-  listen('ERROR', () => { clearPlayTimeout(); fail('Twitch couldn’t play this VOD. It may be deleted, restricted, or blocked. Check the original link and try again.'); });
-  listen('PLAYBACK_BLOCKED', () => { clearPlayTimeout(); emit(onState, 'blocked'); });
+  listen('ENDED', () => { playRequested = false; clearPlayRetry(); emit(onState, 'ended'); });
+  listen('ERROR', () => { playRequested = false; clearPlayRetry(); fail('Twitch couldn’t play this VOD. It may be deleted, restricted, or blocked. Check the original link and try again.'); });
+  const sendPlay = () => {
+    // Reapply audio with the play request; an earlier initialization mute may
+    // have reached Twitch before its command handler was ready.
+    if (!muted) attemptedWithSound = true;
+    player.setMuted(muted);
+    player.play();
+  };
+  listen('PLAYBACK_BLOCKED', () => {
+    clearPlayRetry();
+    if (playRequested && attemptedWithSound && !retriedMuted) {
+      // Programmatic playback with sound can be rejected even when the user
+      // clicks the shared button. Retry once muted and reflect it in the UI.
+      retriedMuted = true;
+      muted = true;
+      emit(onMutedFallback);
+      if (!playRequested || disposed) return;
+      emit(onState, 'buffering');
+      sendPlay();
+      return;
+    }
+    playRequested = false;
+    emit(onState, 'blocked');
+  });
   return {
     ready,
     play() {
       prepareFrame();
-      clearPlayTimeout();
+      clearPlayRetry();
+      playRequested = true;
+      playAcknowledged = false;
+      attemptedWithSound = false;
+      retriedMuted = false;
       emit(onState, 'buffering');
-      playTimeout = setTimeout(() => { if (!disposed) emit(onState, 'blocked'); }, 7000);
-      player.play();
+      sendPlay();
+      // Recover a first command lost during Twitch's initialization. A slow
+      // buffer is never treated as an autoplay failure or forcibly paused.
+      if (playRequested && !playAcknowledged) {
+        playRetry = setTimeout(() => {
+          if (!disposed && playRequested && !playAcknowledged) sendPlay();
+        }, 1000);
+      }
     },
-    pause() { clearPlayTimeout(); player.pause(); },
+    pause() { playRequested = false; clearPlayRetry(); player.pause(); },
     seek: seconds => { if (source.seekable) player.seek(seconds); },
-    mute: muted => player.setMuted(muted),
+    mute(value) { muted = Boolean(value); player.setMuted(muted); },
     time: () => source.seekable ? player.getCurrentTime() || 0 : 0,
     duration: () => source.seekable ? player.getDuration() || 0 : 0,
     rates: () => [], setRate() {},
     destroy() {
+      if (disposed) return;
       disposed = true;
       clearTimeout(timeout);
-      clearPlayTimeout();
+      clearInterval(readyCheck);
+      clearPlayRetry();
       if (!settled) { settled = true; readyResolve(); }
       try { player.pause(); } catch { /* May be destroyed while loading. */ }
       // Twitch has no documented destroy method; removing its owned DOM unloads the embed.

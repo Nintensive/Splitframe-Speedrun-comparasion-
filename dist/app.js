@@ -215,6 +215,11 @@ async function mountSource(index, source, preferences = {}, file) {
       },
       onState: state => session.state(index, token, state),
       onError: message => session.fail(index, token, message),
+      onMutedFallback: () => {
+        if (!session.isCurrent(index, token)) return;
+        session.setAudio('mute');
+        toast('Twitch blocked playback with sound. Retrying muted. Click inside Twitch before enabling audio.');
+      },
       onRate: rate => {
         if (!session.isCurrent(index, token)) return;
         session.slots[index].rate = rate;

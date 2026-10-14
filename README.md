@@ -33,8 +33,12 @@ events inside another site's iframe cannot reach the comparison page.
 | Direct video.twimg.com MP4 links | Yes | Yes | 0.25–2× |
 
 Twitch live streams are intentionally unsupported. Paste a recorded
-`twitch.tv/videos/...` link. If browser restrictions prevent a Twitch VOD from
-starting, click Play inside its player once, then retry the toolbar.
+`twitch.tv/videos/...` link. Shared controls wait for the VOD metadata and retry
+an unanswered first play command once. If Twitch blocks playback with sound,
+Splitframe retries muted and updates the audio selector. Slow buffering does
+not stop playback. If muted playback is still blocked, click Play inside the
+Twitch player once, then retry the toolbar. Click inside Twitch before enabling
+audio if your browser requires it.
 
 A source with independent controls does not disable toolbar controls for the
 other video. To link playback for footage from an X post, use its direct HTTPS
@@ -72,7 +76,8 @@ npm test
 
 The tests cover URL formats, shared and partial playback, independent resets,
 frame boundaries, keyboard focus, delayed SDK events, file lifecycle, X widget
-rendering failures, and provider API commands. Provider and media doubles are
+rendering failures, Twitch readiness, muted recovery, delayed buffering,
+cancelled retries, and provider API commands. Provider and media doubles are
 used, so passing tests do not establish real network playback in a browser.
 
 ## Hosting
