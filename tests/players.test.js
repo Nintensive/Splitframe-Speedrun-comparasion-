@@ -28,16 +28,24 @@ async function twitchFixture(callbacks = {}, { duration = 1800 } = {}) {
     static instances = [];
     static READY = 'ready'; static VIDEO_READY = 'video.ready'; static PLAY = 'play'; static PLAYING = 'playing'; static PAUSE = 'pause'; static ENDED = 'ended'; static ERROR = 'error'; static PLAYBACK_BLOCKED = 'blocked';
     constructor(id, config) {
-      raw = this; options = config; this.listeners = {}; this.calls = []; this.duration = duration;
+      raw = this; options = config; this.listeners = {}; this.calls = []; this.duration = duration; this.paused = true; this.current = 0;
       TwitchPlayer.instances.push(this);
       this.iframe = new Element('iframe'); document.created.find(el => el.id === id).append(this.iframe);
     }
-    addEventListener(name, callback) { this.listeners[name] = callback; }
+    addEventListener(name, callback) {
+      this.listeners[name] = data => {
+        if (['play', 'playing'].includes(name)) this.paused = false;
+        if (['pause', 'blocked'].includes(name)) this.paused = true;
+        callback(data);
+      };
+    }
     play() { this.calls.push(['play']); this.onPlay?.(); }
-    pause() { this.calls.push(['pause']); }
+    pause() { this.paused = true; this.calls.push(['pause']); }
     seek(value) { this.calls.push(['seek', value]); }
     setMuted(value) { this.muted = value; this.calls.push(['mute', value]); }
-    getCurrentTime() { return 0; }
+    getCurrentTime() { return this.current; }
+    isPaused() { return this.paused; }
+    getEnded() { return Boolean(this.ended); }
     getDuration() { return this.duration; }
   }
   win.Twitch = { Player: TwitchPlayer };
@@ -101,7 +109,7 @@ test('Twitch VOD embeds send documented play/pause/seek APIs and map readiness a
   adapter.play(); adapter.pause(); adapter.seek(12.75); adapter.mute(false);
   assert.deepEqual(raw.calls, [['mute', true], ['play'], ['pause'], ['seek', 12.75], ['mute', false]]);
   raw.listeners.playing(); raw.listeners.blocked();
-  assert.deepEqual(states, ['buffering', 'playing', 'blocked']); assert.deepEqual(adapter.rates(), []);
+  assert.deepEqual(states, ['starting', 'playing', 'blocked']); assert.deepEqual(adapter.rates(), []);
   assert.equal(adapter.time(), 30.25); adapter.destroy(); assert.equal(mount.children.length, 0);
   raw.listeners.playing(); assert.equal(states.length, 3);
 });
@@ -150,6 +158,78 @@ test('Twitch buffering can exceed seven seconds without pausing either video', a
   assert.equal(raw.calls.filter(call => call[0] === 'play').length, 1);
   assert.equal(raw.calls.some(call => call[0] === 'pause'), false);
   assert.equal(states.includes('blocked'), false);
+});
+
+test('an unanswered Twitch Play request reports a native activation step when the SDK confirms it stayed paused', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const states = [];
+  const { adapter, raw } = await twitchFixture({ onState: state => states.push(state) });
+  t.after(() => adapter.destroy());
+  raw.listeners.ready(); await adapter.ready;
+  adapter.play();
+  assert.equal(states.at(-1), 'starting', 'sending a command is not evidence of buffering');
+  t.mock.timers.tick(8000);
+  assert.equal(states.at(-1), 'needs-click');
+  assert.equal(states.includes('buffering'), false);
+  assert.equal(states.includes('blocked'), false);
+  raw.listeners.playing();
+  assert.equal(states.at(-1), 'playing');
+});
+
+test('an unpaused Twitch startup without events keeps waiting rather than forcibly stopping a slow buffer', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const states = [];
+  const { adapter, raw } = await twitchFixture({ onState: state => states.push(state) });
+  t.after(() => adapter.destroy());
+  raw.listeners.ready(); await adapter.ready;
+  adapter.play(); raw.paused = false;
+  t.mock.timers.tick(10000);
+  assert.equal(states.at(-1), 'waiting');
+  assert.equal(raw.calls.some(call => call[0] === 'pause'), false);
+});
+
+test('two advancing Twitch timestamps confirm playback when PLAYING is missing, while a single seek does not', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const states = [];
+  const { adapter, raw } = await twitchFixture({ onState: state => states.push(state) });
+  t.after(() => adapter.destroy());
+  raw.listeners.ready(); await adapter.ready;
+  adapter.play(); raw.paused = false;
+  raw.current = 30; t.mock.timers.tick(500);
+  t.mock.timers.tick(500);
+  assert.equal(states.at(-1), 'starting');
+  raw.current = 30.5; t.mock.timers.tick(500);
+  assert.equal(states.at(-1), 'playing');
+  t.mock.timers.tick(10000);
+  assert.equal(states.at(-1), 'playing');
+  raw.paused = true; t.mock.timers.tick(500);
+  assert.equal(states.at(-1), 'paused');
+});
+
+test('a muted retry that silently remains paused also receives the activation prompt', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const states = [];
+  const { adapter, raw } = await twitchFixture({ onState: state => states.push(state) });
+  t.after(() => adapter.destroy());
+  raw.listeners.ready(); await adapter.ready;
+  adapter.mute(false); adapter.play(); raw.listeners.blocked();
+  t.mock.timers.tick(8000);
+  assert.equal(states.at(-1), 'needs-click');
+});
+
+test('Twitch playback polling keeps an ended VOD finished after earlier timestamps advanced', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const states = [];
+  const { adapter, raw } = await twitchFixture({ onState: state => states.push(state) });
+  t.after(() => adapter.destroy());
+  raw.listeners.ready(); await adapter.ready;
+  adapter.play(); raw.paused = false;
+  raw.current = 0.5; t.mock.timers.tick(500);
+  raw.current = 1; t.mock.timers.tick(500);
+  assert.equal(states.at(-1), 'playing');
+  raw.ended = true; raw.listeners.ended();
+  t.mock.timers.tick(10000);
+  assert.equal(states.at(-1), 'ended');
 });
 
 test('Twitch retries sound-blocked playback muted once and reports a genuine second rejection', async t => {

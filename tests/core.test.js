@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseVideoUrl, parseTime, formatTime, shortcutAction, ComparisonSession } from '../dist/core.js';
+import { parseVideoUrl, parseTime, formatTime, shortcutAction, playbackScrollDelta, ComparisonSession } from '../dist/core.js';
 
 const YT_ID = 'M7lc1UVf-VE';
 const yt = () => parseVideoUrl(`https://youtube.com/watch?v=${YT_ID}`);
@@ -165,6 +165,34 @@ test('keyboard shortcuts work after toolbar buttons are focused without stealing
   for (const tagName of ['INPUT', 'TEXTAREA', 'SELECT', 'VIDEO', 'IFRAME']) assert.equal(shortcutAction({ code: 'Space', key: ' ', target: { tagName } }, context), null);
   assert.equal(shortcutAction({ code: 'Space', key: ' ', target: { tagName: 'BUTTON', dataset: { nativeSpace: 'true' } } }, context), null);
   assert.equal(shortcutAction({ key: 'r', ctrlKey: true }, context), null);
+});
+
+test('shared Play reveals offscreen Twitch frames without letting the toolbar cover them', () => {
+  const rects = [{ top: -480, bottom: -180 }, { top: -480, bottom: -180 }];
+  const delta = playbackScrollDelta(rects, 900, 120);
+  assert.equal(delta, -600);
+  assert.equal(rects[0].top - delta, 120);
+  assert.equal(playbackScrollDelta([{ top: 450, bottom: 750 }], 700, 120), 330);
+  assert.equal(playbackScrollDelta([{ top: 140, bottom: 440 }], 700, 120), 0);
+  assert.equal(playbackScrollDelta([], 700, 120), 0);
+});
+
+test('a confirmed unanswered paused Twitch request stops the pair and recovers after native activation', async () => {
+  const { session, players } = await loadedPair([vod(), yt()]);
+  session.toggle();
+  session.state(0, session.slots[0].token, 'starting');
+  session.state(1, session.slots[1].token, 'playing');
+  session.state(0, session.slots[0].token, 'needs-click');
+  assert.equal(session.active, false);
+  assert.equal(session.slots[0].pendingPlay, false);
+  assert.equal(players[1].calls.at(-1)[0], 'pause');
+  session.state(0, session.slots[0].token, 'paused');
+  assert.equal(session.slots[0].status, 'needs-click');
+  session.state(0, session.slots[0].token, 'playing');
+  session.state(0, session.slots[0].token, 'paused');
+  session.toggle();
+  assert.equal(players[0].calls.at(-1)[0], 'play');
+  assert.equal(players[1].calls.at(-1)[0], 'play');
 });
 
 test('synchronous playback rejection does not start the second video alone', async () => {

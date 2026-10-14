@@ -34,11 +34,20 @@ events inside another site's iframe cannot reach the comparison page.
 
 Twitch live streams are intentionally unsupported. Paste a recorded
 `twitch.tv/videos/...` link. Shared controls wait for the VOD metadata and retry
-an unanswered first play command once. If Twitch blocks playback with sound,
+an unanswered first play command once. The toolbar sits above the players and
+stays reachable as you scroll. Play and Space bring Twitch players into view;
+Twitch can ignore API playback requests when the embed is outside the viewport.
+Keep both Twitch players visible during a comparison.
+
+If Twitch blocks playback with sound,
 Splitframe retries muted and updates the audio selector. Slow buffering does
-not stop playback. If muted playback is still blocked, click Play inside the
-Twitch player once, then retry the toolbar. Click inside Twitch before enabling
-audio if your browser requires it.
+not stop playback. An unanswered Play request shows Starting instead of assuming
+buffering. After eight seconds, if Twitch confirms it remained paused, the pair
+pauses with a prompt to activate Twitch's own Play button once. Unpaused or unknown
+states keep waiting without a forced stop. Advancing timestamps can confirm
+playback if the SDK misses a Playing event. Click inside Twitch before enabling
+audio if your browser requires it. If prompted, start Twitch inside its player,
+pause it, click outside the iframe, and retry the shared controls.
 
 A source with independent controls does not disable toolbar controls for the
 other video. To link playback for footage from an X post, use its direct HTTPS
@@ -77,7 +86,8 @@ npm test
 The tests cover URL formats, shared and partial playback, independent resets,
 frame boundaries, keyboard focus, delayed SDK events, file lifecycle, X widget
 rendering failures, Twitch readiness, muted recovery, delayed buffering,
-cancelled retries, and provider API commands. Provider and media doubles are
+cancelled retries, viewport alignment, unanswered requests, state reconciliation,
+and provider API commands. Provider and media doubles are
 used, so passing tests do not establish real network playback in a browser.
 
 ## Hosting

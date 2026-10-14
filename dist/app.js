@@ -1,4 +1,4 @@
-import { ComparisonSession, parseVideoUrl, localVideoSource, parseTime, formatTime, shortcutAction, MAX_START } from './core.js';
+import { ComparisonSession, parseVideoUrl, localVideoSource, parseTime, formatTime, shortcutAction, playbackScrollDelta, MAX_START } from './core.js';
 import { createPlayer } from './players.js';
 
 const $ = (selector, parent = document) => parent.querySelector(selector);
@@ -89,7 +89,7 @@ function updateRates(index) {
 }
 
 function render() {
-  const stateNames = { empty: 'Waiting for video', reselect: 'Choose file again', loading: 'Loading player…', ready: 'Ready', paused: 'Paused', playing: 'Playing', buffering: 'Buffering…', manual: 'Own controls', ended: 'Finished', blocked: 'Playback blocked', offline: 'Offline / unavailable', error: 'Couldn’t load' };
+  const stateNames = { empty: 'Waiting for video', reselect: 'Choose file again', loading: 'Loading player…', ready: 'Ready', paused: 'Paused', playing: 'Playing', starting: 'Starting…', waiting: 'Waiting for Twitch', 'needs-click': 'Click Twitch Play', buffering: 'Buffering…', manual: 'Own controls', ended: 'Finished', blocked: 'Playback blocked', offline: 'Offline / unavailable', error: 'Couldn’t load' };
   session.slots.forEach((slot, index) => {
     const view = views[index];
     const hasSource = Boolean(slot.source);
@@ -133,6 +133,7 @@ function render() {
     if (!error) {
       if (reselect) { text = `Choose “${slot.source.filename}” again to restore this video. Its start point and FPS have been saved. Local videos aren’t uploaded.`; info = true; }
       else if (slot.status === 'blocked') text = 'Playback did not start. Click Play inside this player once, then click outside the video and retry the shared button or Space. Keep audio muted if the browser still blocks playback.';
+      else if (slot.status === 'needs-click' || slot.status === 'waiting') text = 'Twitch has not started the shared Play request. Keep the video visible. Click Play inside Twitch once, pause it, then click outside the video and retry the shared Play button. For two Twitch videos, use a window wide enough to keep both players on screen.';
       else if (slot.status === 'offline') text = 'This video is unavailable. Check the original link or choose another recorded video.';
       else if (slot.source?.kind === 'twitch-clip') { text = 'Twitch clips use their own player controls. For shared play, pause and timestamps, paste a Twitch VOD link instead. Unavailable clips show a message inside Twitch’s player.'; info = true; }
       else if (slot.source?.kind === 'x-post') { text = 'X posts use their own embedded video controls. The shared button still controls the other supported video. For linked playback and timestamps on an X video, use its direct video.twimg.com MP4 link or choose a local copy.'; info = true; }
@@ -162,7 +163,7 @@ function render() {
   } else if (session.slots.some(s => s.status === 'error' || s.status === 'offline')) {
     title.textContent = 'A video needs attention';
     note.textContent = 'Check the message above and load it again.';
-  } else if (session.slots.some(s => s.status === 'blocked')) {
+  } else if (session.slots.some(s => ['blocked', 'needs-click'].includes(s.status))) {
     title.textContent = 'Playback needs a click';
     note.textContent = 'Click inside the blocked player, then try again.';
   } else if (session.slots.some(s => s.status === 'reselect')) {
@@ -170,9 +171,15 @@ function render() {
     note.textContent = 'Your saved start points are ready. Reselect the files to resume.';
   } else if (session.slots.some(s => s.status === 'loading')) {
     title.textContent = 'Connecting your players';
-    note.textContent = 'Shared controls unlock when both players are ready.';
+    note.textContent = 'Ready videos can use the toolbar while the other player loads.';
+  } else if (session.slots.some(s => s.status === 'waiting')) {
+    title.textContent = 'Waiting for Twitch to start';
+    note.textContent = 'Keep Twitch visible. If it stays paused, try its own Play button once.';
+  } else if (session.slots.some(s => s.status === 'starting')) {
+    title.textContent = 'Starting your comparison';
+    note.textContent = 'Playback has been requested. Waiting for the videos to start.';
   } else if (session.canPlay) {
-    title.textContent = session.active ? 'Playback controls linked' : 'Both players ready';
+    title.textContent = session.active ? 'Playback controls linked' : targets.length === 2 ? 'Both players ready' : `${targetLabel === 'run A' ? 'Run A' : 'Run B'} ready`;
     note.textContent = targets.length === 2 ? 'Play together. Reset returns to your saved starts.' : 'This video can use the toolbar. Add a second supported video to link them.';
   } else {
     title.textContent = 'Ready when you are';
@@ -301,7 +308,20 @@ views.forEach((view, index) => {
   });
 });
 
-$('#play-both').addEventListener('click', () => session.toggle());
+function togglePlayback() {
+  if (!session.active) {
+    const twitchRects = session.slots.flatMap((slot, index) => {
+      if (!slot.ready || slot.source?.kind !== 'twitch-vod') return [];
+      const frame = $('.embed-mount iframe', views[index]) || $('.video-shell', views[index]);
+      return [frame.getBoundingClientRect()];
+    });
+    const inset = $('.transport').getBoundingClientRect().height + 28;
+    const delta = playbackScrollDelta(twitchRects, window.innerHeight, inset);
+    if (Math.abs(delta) > 1) window.scrollTo({ top: Math.max(0, window.scrollY + delta), behavior: 'instant' });
+  }
+  session.toggle();
+}
+$('#play-both').addEventListener('click', togglePlayback);
 $('#reset-both').addEventListener('click', () => session.reset());
 $$('input[name="audio"]').forEach(input => input.addEventListener('change', () => session.setAudio(input.value)));
 $('#new-session').addEventListener('click', () => {
@@ -322,7 +342,7 @@ document.addEventListener('keydown', event => {
   const action = shortcutAction(event, session);
   if (!action) return;
   event.preventDefault();
-  if (action === 'toggle') session.toggle();
+  if (action === 'toggle') togglePlayback();
   if (action === 'reset') session.reset();
 });
 

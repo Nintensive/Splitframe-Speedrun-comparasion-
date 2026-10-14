@@ -13,3 +13,7 @@
 @media(max-width:850px){.local-file-row{padding-inline:22px}.file-name{font-size:10px}}
 @media(max-width:520px){.local-file-row{padding-inline:14px;padding-bottom:14px;gap:8px}.file-name{font-size:9px}}
 .x-mark{font-size:16px;line-height:1}.video-shell.x-post{height:360px;aspect-ratio:auto;min-height:300px}.video-shell.x-post .embed-mount{height:auto;min-height:100%;padding:12px}.video-shell.x-post .embed-mount>div{height:auto;min-height:0;display:flex;justify-content:center}.video-shell.x-post .embed-mount iframe{min-height:0;max-width:100%}
+
+/* Keep shared controls reachable while Twitch players remain visible. */
+.transport{position:sticky;top:12px;z-index:6;margin-top:0;margin-bottom:20px}
+.player-state[data-status="needs-click"],.player-state[data-status="waiting"]{color:#edba83}

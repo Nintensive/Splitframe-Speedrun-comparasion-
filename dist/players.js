@@ -198,12 +198,13 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
   await sdk(source.kind === 'youtube' ? 'youtube' : 'twitch');
   // A replacement load may have removed this mount while the SDK was loading.
   if (!inner.isConnected) throw new Error('Video load was replaced.');
-  let readyResolve, readyReject, readyCheck, settled = false;
+  let readyResolve, readyReject, readyCheck, stateCheck, settled = false;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
   // Avoid unhandled rejections if a SDK constructor throws before the adapter is returned.
   ready.catch(() => {});
   const timeout = setTimeout(() => {
     clearInterval(readyCheck);
+    clearInterval(stateCheck);
     if (!settled && !disposed) { settled = true; readyReject(new Error('The player didn’t become ready. Check the video’s availability, connection, or content blocker, then press Load again.')); }
   }, 25000);
   const complete = () => {
@@ -216,6 +217,7 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
   const fail = message => {
     clearTimeout(timeout);
     clearInterval(readyCheck);
+    clearInterval(stateCheck);
     if (!settled) { settled = true; readyReject(new Error(message)); }
     emit(onError, message);
   };
@@ -268,8 +270,10 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
     const event = window.Twitch.Player[name];
     if (event) player.addEventListener(event, data => { if (!disposed) callback(data); });
   };
-  let readyEventSeen = false, muted = true, playRequested = false, playAcknowledged = false, attemptedWithSound = false, retriedMuted = false, playRetry;
-  const clearPlayRetry = () => clearTimeout(playRetry);
+  let readyEventSeen = false, providerReady = false, muted = true, playRequested = false, playAcknowledged = false, attemptedWithSound = false, retriedMuted = false, playRetry, startupFeedback;
+  let lastState = 'ready', lastTime = 0, movingSamples = 0;
+  const setState = state => { lastState = state; emit(onState, state); };
+  const clearPlayRetry = () => { clearTimeout(playRetry); clearTimeout(startupFeedback); };
   const prepareFrame = () => {
     const iframe = inner.querySelector?.('iframe');
     if (!iframe) return;
@@ -282,7 +286,13 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
   // that snapshot so initialization seeks and the first play command are usable.
   const checkReady = () => {
     if (disposed || settled || !readyEventSeen) return;
-    try { if (player.getDuration() > 0) complete(); } catch { /* Metadata is still arriving. */ }
+    try {
+      if (player.getDuration() > 0) {
+        providerReady = true;
+        lastTime = player.getCurrentTime() || 0;
+        complete();
+      }
+    } catch { /* Metadata is still arriving. */ }
   };
   const playerReady = () => { readyEventSeen = true; checkReady(); };
   listen('READY', playerReady);
@@ -291,12 +301,17 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
   const acknowledgePlay = state => {
     playAcknowledged = true;
     clearPlayRetry();
-    emit(onState, state);
+    if (state === 'buffering') movingSamples = 0;
+    setState(state);
   };
   listen('PLAY', () => acknowledgePlay('buffering'));
   listen('PLAYING', () => acknowledgePlay('playing'));
-  listen('PAUSE', () => emit(onState, 'paused'));
-  listen('ENDED', () => { playRequested = false; clearPlayRetry(); emit(onState, 'ended'); });
+  listen('PAUSE', () => {
+    movingSamples = 0;
+    if (playAcknowledged) { playRequested = false; clearPlayRetry(); }
+    setState('paused');
+  });
+  listen('ENDED', () => { playRequested = false; movingSamples = 0; clearPlayRetry(); setState('ended'); });
   listen('ERROR', () => { playRequested = false; clearPlayRetry(); fail('Twitch couldn’t play this VOD. It may be deleted, restricted, or blocked. Check the original link and try again.'); });
   const sendPlay = () => {
     // Reapply audio with the play request; an earlier initialization mute may
@@ -305,6 +320,19 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
     player.setMuted(muted);
     player.play();
   };
+  const watchStartup = () => {
+    clearTimeout(startupFeedback);
+    if (!playRequested || playAcknowledged) return;
+    startupFeedback = setTimeout(() => {
+      if (disposed || !playRequested || playAcknowledged) return;
+      // Only stop the comparison if Twitch confirms that it stayed paused.
+      // A slow buffer or unknown state gets guidance and keeps waiting.
+      if (player.isPaused?.() === true) {
+        playRequested = false;
+        setState('needs-click');
+      } else setState('waiting');
+    }, 8000);
+  };
   listen('PLAYBACK_BLOCKED', () => {
     clearPlayRetry();
     if (playRequested && attemptedWithSound && !retriedMuted) {
@@ -312,15 +340,43 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
       // clicks the shared button. Retry once muted and reflect it in the UI.
       retriedMuted = true;
       muted = true;
+      playAcknowledged = false;
       emit(onMutedFallback);
       if (!playRequested || disposed) return;
-      emit(onState, 'buffering');
+      setState('starting');
       sendPlay();
+      watchStartup();
       return;
     }
     playRequested = false;
-    emit(onState, 'blocked');
+    setState('blocked');
   });
+  // Reconcile the displayed state with actual playback when an embed event is
+  // missed. Two advancing timestamps avoid treating a single seek as playback.
+  stateCheck = setInterval(() => {
+    if (disposed || !providerReady) return;
+    try {
+      const current = player.getCurrentTime() || 0;
+      const paused = player.isPaused?.();
+      if (player.getEnded?.()) {
+        playRequested = false; movingSamples = 0; clearPlayRetry();
+        if (lastState !== 'ended') setState('ended');
+        lastTime = current;
+        return;
+      }
+      if (paused === false) {
+        if (current > lastTime + 0.01) movingSamples++;
+        else if (current < lastTime - 0.01) movingSamples = 0;
+        if (movingSamples >= 2 && lastState !== 'playing') acknowledgePlay('playing');
+      } else {
+        movingSamples = 0;
+        if (paused === true && playAcknowledged && lastState === 'playing') {
+          playRequested = false; clearPlayRetry(); setState('paused');
+        }
+      }
+      lastTime = current;
+    } catch { /* Twitch may briefly disconnect while changing quality. */ }
+  }, 500);
   return {
     ready,
     play() {
@@ -330,7 +386,9 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
       playAcknowledged = false;
       attemptedWithSound = false;
       retriedMuted = false;
-      emit(onState, 'buffering');
+      movingSamples = 0;
+      lastTime = player.getCurrentTime() || 0;
+      setState('starting');
       sendPlay();
       // Recover a first command lost during Twitch's initialization. A slow
       // buffer is never treated as an autoplay failure or forcibly paused.
@@ -338,9 +396,10 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
         playRetry = setTimeout(() => {
           if (!disposed && playRequested && !playAcknowledged) sendPlay();
         }, 1000);
+        watchStartup();
       }
     },
-    pause() { playRequested = false; clearPlayRetry(); player.pause(); },
+    pause() { playRequested = false; movingSamples = 0; clearPlayRetry(); player.pause(); },
     seek: seconds => { if (source.seekable) player.seek(seconds); },
     mute(value) { muted = Boolean(value); player.setMuted(muted); },
     time: () => source.seekable ? player.getCurrentTime() || 0 : 0,
@@ -351,6 +410,7 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
       disposed = true;
       clearTimeout(timeout);
       clearInterval(readyCheck);
+      clearInterval(stateCheck);
       clearPlayRetry();
       if (!settled) { settled = true; readyResolve(); }
       try { player.pause(); } catch { /* May be destroyed while loading. */ }
