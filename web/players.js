@@ -71,7 +71,7 @@ export function localVideoError(code) {
   })[code] || 'This video couldn’t be opened. Choose a different file or try an MP4 or WebM version.';
 }
 
-function createMediaPlayer(mount, mediaUrl, { label, local = false, release = () => {}, onState = () => {}, onError = () => {}, onRate = () => {}, onMount = () => {} } = {}) {
+function createMediaPlayer(mount, mediaUrl, { label, provider = 'X', local = false, setupMedia, release = () => {}, onState = () => {}, onError = () => {}, onRate = () => {}, onMount = () => {} } = {}) {
   const video = document.createElement('video');
   let disposed = false, settled = false, readyResolve, readyReject;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
@@ -83,7 +83,7 @@ function createMediaPlayer(mount, mediaUrl, { label, local = false, release = ()
     if (!settled) { settled = true; readyReject(new Error(message)); }
     emit(onError, message);
   };
-  const timeout = setTimeout(() => fail(local ? 'The browser couldn’t read this video’s duration. Choose it again, or try an MP4 or WebM version.' : 'The X video did not load. Check that this is an available direct MP4 link, or open a local copy.'), 25000);
+  const timeout = setTimeout(() => fail(local ? 'The browser couldn’t read this video’s duration. Choose it again, or try an MP4 or WebM version.' : `${provider} video did not load. Press Load to retry, or choose a local copy.`), 30000);
   video.controls = true;
   video.playsInline = true;
   video.muted = true;
@@ -106,10 +106,13 @@ function createMediaPlayer(mount, mediaUrl, { label, local = false, release = ()
   video.addEventListener('ended', () => emit(onState, 'ended'));
   for (const event of ['waiting', 'stalled']) video.addEventListener(event, () => { if (!video.paused) emit(onState, 'buffering'); });
   video.addEventListener('ratechange', () => emit(onRate, video.playbackRate));
-  video.addEventListener('error', () => fail(local ? localVideoError(video.error?.code) : 'This X MP4 is unavailable, expired, or unsupported by your browser. Check the original link, or choose a local copy.'));
-  video.src = mediaUrl;
+  video.addEventListener('error', () => fail(local ? localVideoError(video.error?.code) : `${provider} video is unavailable, expired, or unsupported by this browser. Press Load to retry, or choose a local copy.`));
   mount.replaceChildren(video);
   onMount();
+  let cleanupMedia = () => {};
+  if (setupMedia) {
+    try { cleanupMedia = setupMedia(video, fail) || cleanupMedia; } catch (error) { fail(error.message); }
+  } else video.src = mediaUrl;
   return {
     ready,
     play() {
@@ -138,12 +141,66 @@ function createMediaPlayer(mount, mediaUrl, { label, local = false, release = ()
       clearTimeout(timeout);
       if (!settled) { settled = true; readyResolve(); }
       video.pause();
+      cleanupMedia();
       video.removeAttribute('src');
       video.load();
       video.remove();
       release();
     }
   };
+}
+
+let hlsPromise;
+async function loadHls() {
+  if (window.Hls) return window.Hls;
+  if (!hlsPromise) {
+    hlsPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      const timeout = setTimeout(() => reject(new Error('The Twitch video player took too long to load. Press Load to retry.')), 15000);
+      script.src = new URL('./vendor/hls.light.min.js', import.meta.url).href;
+      script.async = true;
+      script.onload = () => { clearTimeout(timeout); window.Hls ? resolve(window.Hls) : reject(new Error('Twitch video playback is unavailable.')); };
+      script.onerror = () => { clearTimeout(timeout); reject(new Error('Couldn’t load the Twitch video player. Press Load to retry.')); };
+      document.head.append(script);
+    });
+    hlsPromise.catch(() => { hlsPromise = null; });
+  }
+  return hlsPromise;
+}
+
+async function createTwitchPlayer(mount, source, options) {
+  const placeholder = document.createElement('div');
+  mount.replaceChildren(placeholder);
+  options.onMount?.();
+  if (source.kind === 'twitch-clip') {
+    const response = await fetch(`/api/twitch/clip/${source.id}`, { credentials: 'omit' });
+    const data = await response.json();
+    if (!response.ok || !data.url) throw new Error(data.error || 'This Twitch clip could not load.');
+    const url = new URL(data.url);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || !['.twitch.tv', '.ttvnw.net', '.cloudfront.net', '.twitchcdn.net'].some(suffix => url.hostname.endsWith(suffix))) throw new Error('Twitch returned an unsupported clip media URL.');
+    if (!placeholder.isConnected) throw new Error('Video load was replaced.');
+    return createMediaPlayer(mount, url.href, { ...options, provider: 'Twitch', label: 'Twitch clip video player' });
+  }
+  const Hls = await loadHls();
+  if (!placeholder.isConnected) throw new Error('Video load was replaced.');
+  const url = `/api/twitch/vod/${source.id}/playlist.m3u8`;
+  return createMediaPlayer(mount, url, { ...options, provider: 'Twitch', label: 'Twitch VOD video player', setupMedia(video, fail) {
+    if (video.canPlayType?.('application/vnd.apple.mpegurl')) { video.src = url; return; }
+    if (!Hls.isSupported()) throw new Error('This browser cannot play Twitch recordings here. Try a current browser or a local copy.');
+    const hls = new Hls({ maxBufferLength: 20, backBufferLength: 15, enableWorker: true });
+    let networkRetries = 0, mediaRetries = 0;
+    hls.on(Hls.Events.ERROR, (_event, data) => {
+      if (!data.fatal) return;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRetries++ < 2) { hls.startLoad(); return; }
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRetries++ < 1) { hls.recoverMediaError(); return; }
+      let message = 'Twitch video playback could not start. Press Load to retry, or choose another public recording.';
+      try { message = JSON.parse(data.response?.data || data.networkDetails?.responseText || '{}').error || message; } catch { /* Keep the readable fallback. */ }
+      hls.destroy(); fail(message);
+    });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    return () => hls.destroy();
+  } });
 }
 
 export function createLocalPlayer(mount, file, options = {}) {
@@ -201,6 +258,7 @@ async function fetchXVideo(url) {
 
 export async function createPlayer(mount, source, { start = 0, file, onState = () => {}, onError = () => {}, onRate = () => {}, onMount = () => {}, onMutedFallback = () => {} } = {}) {
   if (source.kind === 'local') return createLocalPlayer(mount, file, { onState, onError, onRate, onMount });
+  if (source.kind.startsWith('twitch')) return createTwitchPlayer(mount, source, { onState, onError, onRate, onMount });
   let disposed = false;
   const emit = (callback, value) => { if (!disposed) callback(value); };
   const parents = twitchParents(window.location, Array.from(window.location.ancestorOrigins || []), document.referrer, window.self !== window.top);
@@ -214,21 +272,6 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
     if (!inner.isConnected) throw new Error('Video load was replaced.');
     const objectUrl = URL.createObjectURL(blob);
     return createMediaPlayer(mount, objectUrl, { label: 'X video player', release: () => URL.revokeObjectURL(objectUrl), onState, onError, onRate, onMount });
-  }
-  if (source.kind === 'twitch-clip') {
-    const iframe = document.createElement('iframe');
-    const url = new URL('https://clips.twitch.tv/embed');
-    url.searchParams.set('clip', source.id);
-    for (const parent of parents) url.searchParams.append('parent', parent);
-    url.searchParams.set('autoplay', 'false');
-    url.searchParams.set('muted', 'true');
-    iframe.src = url.href;
-    iframe.title = 'Twitch clip — use the controls inside this player';
-    iframe.allow = 'autoplay; fullscreen; picture-in-picture';
-    iframe.allowFullscreen = true;
-    iframe.referrerPolicy = 'strict-origin-when-cross-origin';
-    inner.replaceWith(iframe);
-    return { ready: Promise.resolve(), play() {}, pause() {}, seek() {}, mute() {}, rates: () => [], setRate() {}, time: () => 0, duration: () => 0, destroy() { disposed = true; iframe.remove(); } };
   }
   await sdk(source.kind === 'youtube' ? 'youtube' : 'twitch');
   // A replacement load may have removed this mount while the SDK was loading.
@@ -294,160 +337,4 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
       destroy() { disposed = true; clearTimeout(timeout); if (!settled) { settled = true; readyResolve(); } player.destroy(); }
     };
   }
-  let player;
-  try {
-    player = new window.Twitch.Player(inner.id, {
-      width: '100%', height: '100%', parent: parents, autoplay: false, muted: true,
-      video: `v${source.id}`, time: `${Math.floor(start)}s`
-    });
-  } catch (error) { clearTimeout(timeout); throw error; }
-  const listen = (name, callback) => {
-    const event = window.Twitch.Player[name];
-    if (event) player.addEventListener(event, data => { if (!disposed) callback(data); });
-  };
-  let readyEventSeen = false, providerReady = false, muted = true, playRequested = false, playAcknowledged = false, attemptedWithSound = false, retriedMuted = false, playRetry, startupFeedback;
-  let lastState = 'ready', lastTime = 0, movingSamples = 0;
-  const setState = state => { lastState = state; emit(onState, state); };
-  const clearPlayRetry = () => { clearTimeout(playRetry); clearTimeout(startupFeedback); };
-  const prepareFrame = () => {
-    const iframe = inner.querySelector?.('iframe');
-    if (!iframe) return;
-    iframe.title = 'Twitch VOD player';
-    iframe.referrerPolicy = 'strict-origin-when-cross-origin';
-    iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
-  };
-  prepareFrame();
-  // The SDK can signal READY before its cached VOD metadata arrives. Wait for
-  // that snapshot so initialization seeks and the first play command are usable.
-  const checkReady = () => {
-    if (disposed || settled || !readyEventSeen) return;
-    try {
-      if (player.getDuration() > 0) {
-        providerReady = true;
-        lastTime = player.getCurrentTime() || 0;
-        complete();
-      }
-    } catch { /* Metadata is still arriving. */ }
-  };
-  const playerReady = () => { readyEventSeen = true; checkReady(); };
-  listen('READY', playerReady);
-  listen('VIDEO_READY', playerReady);
-  readyCheck = setInterval(checkReady, 100);
-  const acknowledgePlay = state => {
-    playAcknowledged = true;
-    clearPlayRetry();
-    if (state === 'buffering') movingSamples = 0;
-    setState(state);
-  };
-  listen('PLAY', () => acknowledgePlay('buffering'));
-  listen('PLAYING', () => acknowledgePlay('playing'));
-  listen('PAUSE', () => {
-    movingSamples = 0;
-    if (playAcknowledged) { playRequested = false; clearPlayRetry(); }
-    setState('paused');
-  });
-  listen('ENDED', () => { playRequested = false; movingSamples = 0; clearPlayRetry(); setState('ended'); });
-  listen('ERROR', () => { playRequested = false; clearPlayRetry(); fail('Twitch couldn’t play this VOD. It may be deleted, restricted, or blocked. Check the original link and try again.'); });
-  const sendPlay = () => {
-    // Reapply audio with the play request; an earlier initialization mute may
-    // have reached Twitch before its command handler was ready.
-    if (!muted) attemptedWithSound = true;
-    player.setMuted(muted);
-    player.play();
-  };
-  const watchStartup = () => {
-    clearTimeout(startupFeedback);
-    if (!playRequested || playAcknowledged) return;
-    startupFeedback = setTimeout(() => {
-      if (disposed || !playRequested || playAcknowledged) return;
-      // isPaused() is a cached SDK snapshot, not a playback rejection. A late
-      // startup must not cancel the pair before Twitch confirms what happened.
-      setState('waiting');
-    }, 8000);
-  };
-  listen('PLAYBACK_BLOCKED', () => {
-    clearPlayRetry();
-    if (playRequested && attemptedWithSound && !retriedMuted) {
-      // Programmatic playback with sound can be rejected even when the user
-      // clicks the shared button. Retry once muted and reflect it in the UI.
-      retriedMuted = true;
-      muted = true;
-      playAcknowledged = false;
-      emit(onMutedFallback);
-      if (!playRequested || disposed) return;
-      setState('starting');
-      sendPlay();
-      watchStartup();
-      return;
-    }
-    playRequested = false;
-    setState('blocked');
-  });
-  // Reconcile the displayed state with actual playback when an embed event is
-  // missed. Two advancing timestamps avoid treating a single seek as playback.
-  stateCheck = setInterval(() => {
-    if (disposed || !providerReady) return;
-    try {
-      const current = player.getCurrentTime() || 0;
-      const paused = player.isPaused?.();
-      if (player.getEnded?.()) {
-        playRequested = false; movingSamples = 0; clearPlayRetry();
-        if (lastState !== 'ended') setState('ended');
-        lastTime = current;
-        return;
-      }
-      if (paused === false) {
-        if (current > lastTime + 0.01) movingSamples++;
-        else if (current < lastTime - 0.01) movingSamples = 0;
-        if (movingSamples >= 2 && lastState !== 'playing') acknowledgePlay('playing');
-      } else {
-        movingSamples = 0;
-        if (paused === true && playAcknowledged && lastState === 'playing') {
-          playRequested = false; clearPlayRetry(); setState('paused');
-        }
-      }
-      lastTime = current;
-    } catch { /* Twitch may briefly disconnect while changing quality. */ }
-  }, 500);
-  return {
-    ready,
-    play() {
-      prepareFrame();
-      clearPlayRetry();
-      playRequested = true;
-      playAcknowledged = false;
-      attemptedWithSound = false;
-      retriedMuted = false;
-      movingSamples = 0;
-      lastTime = player.getCurrentTime() || 0;
-      setState('starting');
-      sendPlay();
-      // Recover a first command lost during Twitch's initialization. A slow
-      // buffer is never treated as an autoplay failure or forcibly paused.
-      if (playRequested && !playAcknowledged) {
-        playRetry = setTimeout(() => {
-          if (!disposed && playRequested && !playAcknowledged) sendPlay();
-        }, 1000);
-        watchStartup();
-      }
-    },
-    pause() { playRequested = false; movingSamples = 0; clearPlayRetry(); player.pause(); },
-    seek: seconds => { if (source.seekable) player.seek(seconds); },
-    mute(value) { muted = Boolean(value); player.setMuted(muted); },
-    time: () => source.seekable ? player.getCurrentTime() || 0 : 0,
-    duration: () => source.seekable ? player.getDuration() || 0 : 0,
-    rates: () => [], setRate() {},
-    destroy() {
-      if (disposed) return;
-      disposed = true;
-      clearTimeout(timeout);
-      clearInterval(readyCheck);
-      clearInterval(stateCheck);
-      clearPlayRetry();
-      if (!settled) { settled = true; readyResolve(); }
-      try { player.pause(); } catch { /* May be destroyed while loading. */ }
-      // Twitch has no documented destroy method; removing its owned DOM unloads the embed.
-      inner.remove();
-    }
-  };
 }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ComparisonSession, localVideoSource, parseVideoUrl } from '../dist/core.js';
-import { createPlayer, localVideoError, resolveXVideo } from '../dist/players.js';
+import { ComparisonSession, localVideoSource, parseVideoUrl } from '../web/core.js';
+import { createPlayer, localVideoError, resolveXVideo } from '../web/players.js';
 
 class NativeVideo extends EventTarget {
   constructor() {
@@ -95,7 +95,6 @@ test('local playback promise rejection is handled without leaving the paired vid
   env.videos[0].emit('loadedmetadata'); await session.attach(0, token, adapter);
   const remote = remoteAdapter(); const otherToken = session.begin(1, parseVideoUrl('https://twitch.tv/videos/123'));
   await session.attach(1, otherToken, remote);
-  session.state(1, otherToken, 'playing');
   env.videos[0].play = () => Promise.reject(Object.assign(new Error('blocked'), { name: 'NotAllowedError' }));
   session.toggle(); await Promise.resolve(); await Promise.resolve();
   assert.equal(session.slots[0].status, 'blocked'); assert.equal(session.active, false); assert.equal(remote.playing, false);
@@ -158,7 +157,6 @@ test('X post links resolve into the same native player used by local recordings'
   env.videos[0].emit('loadedmetadata'); await session.attach(0, token, player);
   const other = remoteAdapter(); const b = session.begin(1, parseVideoUrl('https://twitch.tv/videos/123'));
   await session.attach(1, b, other);
-  session.state(1, b, 'playing');
   session.toggle(); assert.equal(env.videos[0].paused, false); assert.equal(other.playing, true);
   session.toggle(); assert.equal(env.videos[0].paused, true); assert.equal(other.playing, false);
   session.reset(); assert.equal(player.time(), 5);
@@ -197,4 +195,49 @@ test('X lookup rejects unavailable posts, missing videos and untrusted media URL
   await assert.rejects(resolveXVideo(source), /no playable video/);
   await assert.rejects(resolveXVideo(source), /supported MP4/);
   await assert.rejects(resolveXVideo(source), /different post/);
+});
+
+test('Twitch VOD HLS and Twitch clips use native shared controls, full-duration seeking and speed', async t => {
+  const env = environment(), session = new ComparisonSession(), instances = [];
+  class Hls {
+    static Events = { ERROR: 'error' }; static ErrorTypes = { NETWORK_ERROR: 'network', MEDIA_ERROR: 'media' };
+    static isSupported() { return true; }
+    constructor() { this.listeners = {}; instances.push(this); }
+    on(event, callback) { this.listeners[event] = callback; }
+    loadSource(url) { this.url = url; }
+    attachMedia(video) { this.video = video; video.duration = 7200; }
+    destroy() { this.destroyed = true; }
+  }
+  globalThis.window = { Hls };
+  t.mock.method(globalThis, 'fetch', async url => {
+    assert.equal(url, '/api/twitch/clip/HelpfulClipSlug');
+    return { ok: true, json: async () => ({ url: 'https://clips-media-assets2.twitch.tv/public.mp4?sig=public' }) };
+  });
+  for (const [index, url] of ['https://twitch.tv/videos/123', 'https://clips.twitch.tv/HelpfulClipSlug'].entries()) {
+    const source = parseVideoUrl(url), token = session.begin(index, source);
+    const player = await createPlayer(env.mount, source, { onState: state => session.state(index, token, state) });
+    env.videos[index].emit('loadedmetadata'); await session.attach(index, token, player);
+  }
+  t.after(() => session.clear());
+  assert.equal(instances[0].url, '/api/twitch/vod/123/playlist.m3u8');
+  assert.equal(session.canPlay, true);
+  session.toggle(); assert.equal(env.videos[0].paused, false); assert.equal(env.videos[1].paused, false);
+  session.toggle(); assert.equal(env.videos[0].paused, true); assert.equal(env.videos[1].paused, true);
+  session.setStart(0, 3600); session.setStart(1, 15); session.reset();
+  assert.equal(env.videos[0].currentTime, 3600); assert.equal(env.videos[1].currentTime, 15);
+  session.setRate(0, 0.5); session.setRate(1, 2);
+  assert.equal(env.videos[0].playbackRate, 0.5); assert.equal(env.videos[1].playbackRate, 2);
+  session.clear(); assert.equal(instances[0].destroyed, true);
+});
+
+test('Twitch clip load errors reject before mounting a fake-ready player', async t => {
+  const env = environment(), source = parseVideoUrl('https://clips.twitch.tv/HelpfulClipSlug');
+  const replies = [
+    { ok: false, json: async () => ({ error: 'This Twitch clip is private, deleted, or unavailable.' }) },
+    { ok: true, json: async () => ({ url: 'https://evil.example/clip.mp4' }) }
+  ];
+  t.mock.method(globalThis, 'fetch', async () => replies.shift());
+  await assert.rejects(createPlayer(env.mount, source), /private, deleted/);
+  await assert.rejects(createPlayer(env.mount, source), /unsupported clip media/);
+  assert.equal(env.videos.length, 0);
 });

@@ -1,4 +1,3 @@
-export const MAX_START = 600;
 export const FPS_OPTIONS = [24, 25, 30, 50, 60, 120];
 
 export function parseTime(value) {
@@ -27,7 +26,7 @@ export function formatTime(value, milliseconds = true) {
 }
 
 export function clampStart(value, duration = Infinity) {
-  const limit = Number.isFinite(duration) && duration > 0 ? Math.min(MAX_START, Math.max(0, duration - 0.001)) : MAX_START;
+  const limit = Number.isFinite(duration) && duration > 0 ? Math.max(0, duration - 0.001) : Number.MAX_SAFE_INTEGER;
   return Math.min(limit, Math.max(0, Number.isFinite(value) ? value : 0));
 }
 
@@ -48,7 +47,7 @@ export function parseVideoUrl(input) {
   const host = url.hostname.toLowerCase().replace(/^www\./, '');
   const path = url.pathname.split('/').filter(Boolean);
   const requestedStart = linkTime(url);
-  const common = { start: clampStart(requestedStart), clamped: requestedStart > MAX_START };
+  const common = { start: clampStart(requestedStart), clamped: false };
   if (host === 'video.twimg.com') {
     if (url.protocol !== 'https:' || !/\.mp4$/i.test(url.pathname)) throw new Error('Use a direct HTTPS MP4 video link from X, or paste the X post link.');
     return { ...common, kind: 'x-video', id: '', label: 'X video · MP4', url: url.href, control: true, seekable: true };
@@ -76,7 +75,7 @@ export function parseVideoUrl(input) {
     else if (path.length === 3 && path[1] === 'clip') { kind = 'twitch-clip'; id = path[2]; }
     else if (path.length === 3 && path[1] === 'v') { kind = 'twitch-vod'; id = path[2]; }
     if (kind === 'twitch-vod' && /^\d+$/.test(id || '')) return { ...common, kind, id, label: 'Twitch VOD', url: `https://www.twitch.tv/videos/${id}`, control: true, seekable: true };
-    if (kind === 'twitch-clip' && /^[\w-]{3,200}$/.test(id || '')) return { ...common, start: 0, kind, id, label: 'Twitch clip', url: `https://clips.twitch.tv/${id}`, control: false, seekable: false };
+    if (kind === 'twitch-clip' && /^[\w-]{3,200}$/.test(id || '')) return { ...common, kind, id, label: 'Twitch clip', url: `https://clips.twitch.tv/${id}`, control: true, seekable: true };
     const reserved = ['directory', 'downloads', 'videos', 'settings', 'subscriptions', 'clips', 'payments', 'inventory', 'login', 'signup', 'search', 'jobs', 'p', 'legal', 'collections', 'wallet', 'turbo'];
     if (path.length === 1 && /^[a-z\d_]{1,25}$/i.test(path[0]) && !reserved.includes(path[0].toLowerCase())) throw new Error('Twitch live streams aren’t supported. Paste a recorded VOD link from twitch.tv/videos/… instead.');
     throw new Error('Use a Twitch VOD or clip link. Live streams, collections, and directory links aren’t supported.');
@@ -95,7 +94,7 @@ export function shortcutAction(event, { canPlay = false, canReset = false, activ
 }
 
 export function emptySlot() {
-  return { source: null, adapter: null, token: 0, status: 'empty', start: 0, fps: 60, rate: 1, error: '', ready: false, mounted: false, pendingPlay: false, activated: true };
+  return { source: null, adapter: null, token: 0, status: 'empty', start: 0, fps: 60, rate: 1, error: '', ready: false, mounted: false, pendingPlay: false };
 }
 
 export function localVideoSource(file) {
@@ -117,15 +116,14 @@ export class ComparisonSession {
   }
   notify() { this.onChange(this); }
   get controlledSlots() { return this.slots.filter(s => s.ready && s.source?.control && !['error', 'offline', 'loading'].includes(s.status)); }
-  get activationSlots() { return this.controlledSlots.filter(s => !s.activated); }
-  get canPlay() { return this.controlledSlots.length > 0 && this.activationSlots.length === 0; }
+  get canPlay() { return this.controlledSlots.length > 0; }
   get canReset() { return this.controlledSlots.some(s => s.source.seekable); }
   get active() { return this.intent || this.slots.some(s => ['playing', 'buffering'].includes(s.status)); }
   begin(index, source, preferences = {}) {
     this.pause();
     const previous = this.slots[index];
     previous.adapter?.destroy();
-    const slot = { ...emptySlot(), source, token: previous.token + 1, activated: source.kind !== 'twitch-vod', status: 'loading', start: clampStart(preferences.start ?? source.start), fps: FPS_OPTIONS.includes(preferences.fps) ? preferences.fps : 60 };
+    const slot = { ...emptySlot(), source, token: previous.token + 1, status: 'loading', start: clampStart(preferences.start ?? source.start), fps: FPS_OPTIONS.includes(preferences.fps) ? preferences.fps : 60 };
     if (!source.seekable) slot.start = 0;
     this.slots[index] = slot;
     this.notify();
@@ -140,7 +138,7 @@ export class ComparisonSession {
       if (!this.isCurrent(index, token)) return;
       const slot = this.slots[index];
       slot.ready = true;
-      if (!['error', 'offline'].includes(slot.status)) slot.status = !slot.activated ? 'activate' : slot.source.control ? 'ready' : 'manual';
+      if (!['error', 'offline'].includes(slot.status)) slot.status = slot.source.control ? 'ready' : 'manual';
       slot.start = clampStart(slot.start, adapter.duration());
       this.applyAudio();
       if (slot.source.seekable && slot.start > 0) adapter.seek(slot.start);
@@ -154,19 +152,6 @@ export class ComparisonSession {
     if (!this.isCurrent(index, token)) return;
     if (this.slots[index].status === 'error') return;
     const slot = this.slots[index];
-    if (!slot.activated && status === 'playing') {
-      // A real first playback confirms Twitch accepted the user's in-frame
-      // gesture. Pause at the saved start before linking the comparison.
-      slot.activated = true;
-      this.pause();
-      if (slot.ready) {
-        slot.adapter.seek(clampStart(slot.start, slot.adapter.duration()));
-        slot.adapter.pause();
-      }
-      slot.status = 'paused';
-      this.notify();
-      return;
-    }
     if (this.slots[index].status === 'blocked' && ['paused', 'ready'].includes(status)) return;
     // SDKs can deliver an earlier initialization pause after a new play command.
     if (this.slots[index].pendingPlay && ['paused', 'ready'].includes(status)) return;

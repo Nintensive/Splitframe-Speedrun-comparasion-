@@ -5,95 +5,80 @@ not perfect
 
 ## Splitframe
 
-A responsive, dark comparison workspace for gaming videos and speedruns.
+A dark, responsive comparison workspace for gaming videos and speedruns.
 
 Live site: https://splitframe.neatprawn1.chatgpt.site
 
-## Use
+Paste a link into each run or choose a local video. Set independent starting
+points, then use the shared **Play / Pause** button beneath the videos.
+**Reset** returns both videos to their saved starts. **Space** toggles playback
+and **R** resets; shortcuts leave text fields and native video controls alone.
 
-Paste a supported link into either run and press **Load**, or use **Choose video**
-to open a local recording. Set independent starting points, choose the video's
-FPS, and use the toolbar to play or pause the controllable video or both together.
-**Reset** pauses supported videos and returns to their saved starts.
-
-**Space** toggles playback and **R** resets. These shortcuts work after using
-the toolbar and alignment buttons, while leaving text entry and file selection
-alone. Click outside an embedded player before using page shortcuts; keyboard
-events inside another site's iframe cannot reach the comparison page.
-
-## Supported sources
-
-| Source | Toolbar play / pause | Start points / reset | Speed selector |
+| Source | Shared playback | Start points / reset | Speed |
 | --- | --- | --- | --- |
-| Local video files | Yes | Yes | 0.25–2× |
-| YouTube videos | Yes | Yes | Available rates |
-| Twitch VODs | Yes | Yes | Native player only |
-| Twitch clips | Own player controls | No | Native player only |
-| X / Twitter video posts | Yes | Yes | 0.25–2× |
-| Direct video.twimg.com MP4 links | Yes | Yes | 0.25–2× |
+| YouTube | Yes | Yes | Available player rates |
+| Public Twitch VOD | Yes | Yes | 0.25–2× |
+| Public Twitch clip | Yes | Yes | 0.25–2× |
+| Public X video post / direct MP4 | Yes | Yes | 0.25–2× |
+| Local video file | Yes | Yes | 0.25–2× |
 
-Twitch live streams are intentionally unsupported. Paste a recorded
-`twitch.tv/videos/...` link. Twitch setup is explicit: click Play inside each
-Twitch player once. Splitframe confirms actual playback, pauses the player at
-its saved start, and then enables shared Play. This handles the initial player
-activation observed in browser testing. A delayed response, including a cached
-paused status, keeps the request active; only Twitch’s actual playback-blocked or
-error events stop the comparison. Splitframe no longer cancels playback at an
-eight-second startup deadline.
-The start-point menus sit above the videos, with the shared toolbar directly
-below both players. Shared Play does not scroll the page when pressed.
-Click outside embedded players to send Space and R to Splitframe.
+Each timeline scales to the loaded video's full duration. Frame nudges use the
+selected FPS; video seeking and streaming timing remain approximate.
+The start-point menus sit above the videos and the shared controls below them.
 
-X post URLs resolve public video metadata through the [FxEmbed Status API](https://github.com/FxEmbed/FxEmbed/wiki/Status-Fetch-API).
-The media downloads without a third-party referrer and plays through a temporary
-browser-local URL, with shared play/pause, timestamps, reset and speed controls.
-Large X videos take longer to load; replacing a run releases its temporary URL.
-The original X link remains available for attribution, and saved
-sessions retain that post URL rather than an expiring CDN link. The lookup sends
-only the post ID, without credentials. It accepts HTTPS MP4 media only from
-`video.twimg.com`. Private, deleted, non-video or unavailable posts show an error.
-The lookup service is an external dependency; it needs no API key. Only Twitch
-clips use independent controls.
+## Twitch playback
 
-Start points range from 0 to 600 seconds; full videos remain playable.
-Frame buttons request a fractional-second seek using the selected FPS.
-Embedded players can seek to a nearby frame, and ads or buffering can affect
-synchronization. This is a review tool rather than an exact run timer.
+VODs stream through HLS.js 1.7.3 (vendored under its Apache-2.0 license).
+Clips use the browser's native video element. Both use the same control adapter
+as local and X recordings, so shared Play controls their actual media elements.
+No initial click inside a Twitch iframe is required.
 
-## Local files and saved sessions
+The Site Worker requests public Twitch playback metadata. VOD playlists and
+segments use signed, expiring, host-restricted relay URLs so browser cross-origin
+restrictions do not prevent playback. Segments stream through the service;
+recordings are not saved. The relay signing key is a secret runtime variable
+named `TWITCH_RELAY_KEY`; never commit its value.
 
-Local recordings play directly from the device and are never uploaded.
-Only file metadata and alignment settings are saved in the browser. Reselect
-files after refreshing to restore their starting points and FPS. Browser codec
-support determines which formats can be decoded. Direct MP4 URLs can expire;
-local copies remain useful when remote media is unavailable.
+Twitch live streams are unsupported. Private, subscriber-only, deleted and
+otherwise restricted recordings fail with a readable error. No Twitch sign-in
+or user credentials are collected. Resolution relies on Twitch's public browser
+playback service; changes upstream can require maintenance.
 
-## Run and test
+## X and local files
 
-No build step or dependencies are needed. Serve `dist/` over HTTP or HTTPS:
+Public X post metadata is resolved through the
+[FxEmbed Status API](https://github.com/FxEmbed/FxEmbed/wiki/Status-Fetch-API).
+Only trusted HTTPS `video.twimg.com` MP4s are accepted. They download without a
+third-party referrer and use a temporary browser-local URL, released when the
+run is replaced. Large videos can take longer to load.
 
-```sh
-python3 -m http.server 8000 --directory dist
-```
+Local files play on the device and are never uploaded. The browser saves only
+source links, file metadata and comparison preferences. Reselect local files
+after refreshing. Original source links remain available beside each video.
 
-Open http://localhost:8000. Test the controller and provider contracts with
-Node.js 22 or newer:
+## Development and hosting
+
+- `web/` contains the browser application and vendored HLS player.
+- `worker/index.js` serves the app and public Twitch playback routes.
+- `scripts/build.mjs` embeds browser assets into `dist/server/index.js`.
+- Sites hosting identity stays in `.openai/hosting.json` and is not needed
+  in the portable GitHub source.
+
+No package dependencies or installation are required. Use Node.js 22 or newer:
 
 ```sh
 npm test
+npm run build
+node scripts/validate-artifact.mjs
 ```
 
-The tests cover URL formats, shared and partial playback, independent resets,
-frame boundaries, keyboard focus, delayed SDK events, file lifecycle, X lookup
-and media failures, Twitch readiness, muted recovery, delayed buffering,
-cancelled retries, Twitch activation, unanswered requests, state reconciliation,
-X video resolution and referrer-free downloads,
-and provider API commands. Provider and media doubles are
-used, so passing tests do not establish real network playback in a browser.
+Deploy the generated Worker as an ES module, configure `TWITCH_RELAY_KEY` as a
+secret, and serve over HTTPS. The supported Sites workflow packages the Worker
+and hosting manifest together. A static-file server alone does not provide
+Twitch playback routes.
 
-## Hosting
-
-Deploy the contents of `dist/` to an HTTPS static host. Twitch parent domains
-and the YouTube origin are taken from the actual page. Keep a referrer policy
-that supplies the embedding origin. Site-specific hosting identity is separate
-from the portable application source.
+Tests cover native Twitch VOD/clip controls, long-video start points, media
+cleanup, YouTube commands, X resolution, failed loads, shared playback, keyboard
+focus, restricted recordings, playlist rewriting, relay signatures, range
+requests and streamed responses. Provider doubles do not establish real network
+playback; the deployed site also needs browser verification.

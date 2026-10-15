@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseVideoUrl, parseTime, formatTime, shortcutAction, ComparisonSession } from '../dist/core.js';
+import { parseVideoUrl, parseTime, formatTime, shortcutAction, ComparisonSession } from '../web/core.js';
 
 const YT_ID = 'M7lc1UVf-VE';
 const yt = () => parseVideoUrl(`https://youtube.com/watch?v=${YT_ID}`);
@@ -24,7 +24,6 @@ async function loadedPair(sources = [yt(), vod()], starts = [12.345, 34.567]) {
   for (let index = 0; index < 2; index++) {
     const token = session.begin(index, sources[index], { start: starts[index] });
     await session.attach(index, token, players[index]);
-    if (sources[index].kind === 'twitch-vod') session.state(index, token, 'playing');
   }
   players.forEach(p => p.calls.length = 0);
   return { session, players };
@@ -35,12 +34,12 @@ test('YouTube watch, short, mobile, live, embedded, and share links normalize to
   for (const link of links) assert.equal(parseVideoUrl(link).id, YT_ID, link);
 });
 
-test('URL timestamps accept seconds, units, and fragments and stop at ten minutes', () => {
+test('URL timestamps accept seconds, units, fragments and times beyond ten minutes', () => {
   assert.equal(parseVideoUrl(`https://youtu.be/${YT_ID}?t=1m23s`).start, 83);
   assert.equal(parseVideoUrl(`https://youtube.com/watch?v=${YT_ID}#t=42.5`).start, 42.5);
   assert.equal(parseVideoUrl('https://twitch.tv/videos/123?t=0h2m3s').start, 123);
   const beyond = parseVideoUrl(`https://youtu.be/${YT_ID}?start=700`);
-  assert.equal(beyond.start, 600); assert.equal(beyond.clamped, true);
+  assert.equal(beyond.start, 700); assert.equal(beyond.clamped, false);
 });
 
 test('Twitch VODs and both clip formats have the right capabilities; live links are rejected', () => {
@@ -51,7 +50,7 @@ test('Twitch VODs and both clip formats have the right capabilities; live links 
   assert.throws(() => parseVideoUrl('https://player.twitch.tv/?channel=twitchdev'), /live streams aren’t supported/);
   for (const link of ['https://clips.twitch.tv/HelpfulClip-Slug123', 'https://www.twitch.tv/runner/clip/HelpfulClip-Slug123', 'https://clips.twitch.tv/embed?clip=HelpfulClip-Slug123']) {
     const source = parseVideoUrl(link);
-    assert.equal(source.kind, 'twitch-clip'); assert.equal(source.control, false); assert.equal(source.seekable, false);
+    assert.equal(source.kind, 'twitch-clip'); assert.equal(source.control, true); assert.equal(source.seekable, true);
   }
 });
 
@@ -85,7 +84,8 @@ test('frame nudges use chosen FPS and repeated second nudges clamp both boundari
   assert.ok(Math.abs(session.slots[0].start - 1) < 1e-10);
   session.setFPS(0, 30); session.nudge(0, -1, true);
   assert.ok(Math.abs(session.slots[0].start - (1 - 1 / 30)) < 1e-10);
-  session.setStart(0, 595); session.nudge(0, 10); assert.equal(session.slots[0].start, 600);
+  session.setStart(0, 595); session.nudge(0, 10); assert.equal(session.slots[0].start, 605);
+  session.setStart(0, 1199); session.nudge(0, 10); assert.equal(session.slots[0].start, 1199.999);
   session.setStart(0, 2); session.nudge(0, -5); assert.equal(session.slots[0].start, 0);
 });
 
@@ -100,14 +100,14 @@ test('seek operations respect short video durations including metadata learned l
   short.duration = () => 20; session.reset(); assert.ok(short.current < 20);
 });
 
-test('a manual clip does not disable toolbar playback or reset for the other VOD', async () => {
+test('a Twitch clip and VOD both receive shared playback and independent reset commands', async () => {
   const { session, players } = await loadedPair([vod(), parseVideoUrl('https://clips.twitch.tv/HelpfulClipSlug')]);
   assert.equal(session.canPlay, true); assert.equal(session.canReset, true);
   session.toggle();
   assert.equal(players[0].calls.some(c => c[0] === 'play'), true);
-  assert.equal(players[1].calls.some(c => c[0] === 'play'), false);
-  session.reset(); assert.equal(players[0].current, 12.345);
-  session.setStart(1, 30); assert.equal(session.slots[1].start, 0);
+  assert.equal(players[1].calls.some(c => c[0] === 'play'), true);
+  session.reset(); assert.equal(players[0].current, 12.345); assert.equal(players[1].current, 34.567);
+  session.setStart(1, 30); assert.equal(session.slots[1].start, 30);
 });
 
 test('stale async loads and callbacks cannot take over a replacement video', async () => {
@@ -207,18 +207,12 @@ test('speed and audio commands follow capabilities and requested source', async 
 });
 
 
-test('Twitch activation gates shared Play and returns each first native playback to its saved start', async () => {
-  const session = new ComparisonSession();
-  const first = adapter(), second = adapter();
-  const a = session.begin(0, vod(), { start: 10 }); await session.attach(0, a, first);
-  const b = session.begin(1, vod(), { start: 20 }); await session.attach(1, b, second);
-  assert.equal(session.canPlay, false); assert.equal(session.activationSlots.length, 2);
-  first.calls.length = 0; second.calls.length = 0;
-  session.toggle(); assert.equal(first.calls.length, 0);
-  session.state(0, a, 'playing');
-  assert.equal(first.current, 10); assert.equal(session.active, false); assert.equal(session.canPlay, false);
-  session.state(1, b, 'playing');
-  assert.equal(second.current, 20); assert.equal(session.canPlay, true);
+test('Twitch recordings start directly from the shared button without native-player activation', async () => {
+  const { session, players } = await loadedPair([vod(), parseVideoUrl('https://clips.twitch.tv/HelpfulClipSlug')], [10, 20]);
+  assert.equal(session.canPlay, true);
   session.toggle();
-  assert.equal(first.calls.at(-1)[0], 'play'); assert.equal(second.calls.at(-1)[0], 'play');
+  assert.equal(players[0].calls.at(-1)[0], 'play'); assert.equal(players[1].calls.at(-1)[0], 'play');
+  session.state(0, session.slots[0].token, 'playing'); session.state(1, session.slots[1].token, 'playing');
+  assert.equal(session.active, true);
+  session.reset(); assert.equal(players[0].current, 10); assert.equal(players[1].current, 20);
 });

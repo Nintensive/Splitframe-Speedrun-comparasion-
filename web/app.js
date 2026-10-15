@@ -1,4 +1,4 @@
-import { ComparisonSession, parseVideoUrl, localVideoSource, parseTime, formatTime, shortcutAction, MAX_START } from './core.js';
+import { ComparisonSession, parseVideoUrl, localVideoSource, parseTime, formatTime, shortcutAction } from './core.js';
 import { createPlayer } from './players.js';
 
 const $ = (selector, parent = document) => parent.querySelector(selector);
@@ -23,7 +23,7 @@ const views = ['A', 'B'].map((letter, index) => {
   $('.input-error', node).id = `source-error-${index}`;
   $('.url-input', node).setAttribute('aria-describedby', `source-error-${index}`);
   $('.start-time', node).setAttribute('aria-label', `Run ${letter} starting timestamp, minutes and seconds`);
-  $('.start-range', node).setAttribute('aria-label', `Run ${letter} start point from zero to ten minutes`);
+  $('.start-range', node).setAttribute('aria-label', `Run ${letter} start point, load a video first`);
   $('.fps-select', node).setAttribute('aria-label', `Run ${letter} video frame rate`);
   $('.speed-select', node).setAttribute('aria-label', `Run ${letter} playback speed`);
   $('.current-time', node).setAttribute('aria-label', `Run ${letter} current time`);
@@ -64,7 +64,7 @@ function save() {
 }
 
 function originalDuration(slot) {
-  try { return slot.ready ? slot.adapter.duration() : 0; } catch { return 0; }
+  try { const duration = slot.ready ? slot.adapter.duration() : 0; return Number.isFinite(duration) && duration > 0 ? duration : 0; } catch { return 0; }
 }
 
 function updateRates(index) {
@@ -85,11 +85,11 @@ function updateRates(index) {
   }
   selector.disabled = !slot.ready || rates.length < 2;
   selector.value = rates.includes(slot.rate) ? slot.rate : 1;
-  $('.speed-note', view).textContent = slot.source?.kind === 'twitch-vod' ? 'Use Twitch’s player controls' : slot.source?.kind === 'twitch-clip' ? 'Use the clip’s controls' : !slot.ready ? 'Load a video to begin' : rates.length < 2 ? 'Normal speed only' : ['local', 'x-video', 'x-post'].includes(slot.source?.kind) ? 'Native video · 0.25–2×' : 'Supported by YouTube';
+  $('.speed-note', view).textContent = !slot.ready ? 'Load a video to begin' : rates.length < 2 ? 'Normal speed only' : ['local', 'x-video', 'x-post', 'twitch-vod', 'twitch-clip'].includes(slot.source?.kind) ? 'Native video · 0.25–2×' : 'Supported by YouTube';
 }
 
 function render() {
-  const stateNames = { empty: 'Waiting for video', reselect: 'Choose file again', loading: 'Loading player…', activate: 'Click Twitch Play once', ready: 'Ready', paused: 'Paused', playing: 'Playing', starting: 'Starting…', waiting: 'Waiting for Twitch', buffering: 'Buffering…', manual: 'Own controls', ended: 'Finished', blocked: 'Playback blocked', offline: 'Offline / unavailable', error: 'Couldn’t load' };
+  const stateNames = { empty: 'Waiting for video', reselect: 'Choose file again', loading: 'Loading player…', ready: 'Ready', paused: 'Paused', playing: 'Playing', starting: 'Starting…', waiting: 'Waiting for Twitch', buffering: 'Buffering…', manual: 'Own controls', ended: 'Finished', blocked: 'Playback blocked', offline: 'Offline / unavailable', error: 'Couldn’t load' };
   session.slots.forEach((slot, index) => {
     const view = views[index];
     const hasSource = Boolean(slot.source);
@@ -98,10 +98,10 @@ function render() {
     const local = slot.source?.kind === 'local';
     const reselect = slot.status === 'reselect';
     const canAdjust = hasSource && slot.source.seekable;
-    $('.player-state', view).dataset.status = slot.ready && !slot.activated ? 'activate' : slot.status;
-    $('.state-text', view).textContent = slot.ready && !slot.activated ? 'Click Twitch Play once' : stateNames[slot.status] || 'Ready';
+    $('.player-state', view).dataset.status = slot.status;
+    $('.state-text', view).textContent = stateNames[slot.status] || 'Ready';
     $('.source-type', view).textContent = slot.source?.label.toUpperCase() || 'NO VIDEO LOADED';
-    $('.video-shell', view).classList.toggle('twitch', slot.source?.kind.startsWith('twitch') || false);
+    $('.video-shell', view).classList.remove('twitch');
 
     $('.empty-player', view).hidden = slot.mounted && !error;
     $('.embed-mount', view).hidden = !slot.mounted || error;
@@ -119,9 +119,13 @@ function render() {
     if (document.activeElement !== timestamp) timestamp.value = formatTime(slot.start);
     timestamp.disabled = !canAdjust;
     const range = $('.start-range', view);
+    const duration = originalDuration(slot);
+    range.max = duration || 1;
     range.value = slot.start;
-    range.disabled = !canAdjust;
-    range.style.setProperty('--progress', `${slot.start / MAX_START * 100}%`);
+    range.disabled = !canAdjust || !slot.ready || !duration;
+    range.style.setProperty('--progress', `${duration ? slot.start / duration * 100 : 0}%`);
+    $$('.range-labels span', view).forEach((label, tick) => { label.textContent = duration ? formatTime(duration * tick / 5, false) : '--:--'; });
+    range.setAttribute('aria-label', duration ? `Start point from zero to ${formatTime(duration, false)}` : 'Start point, load a video first');
     range.setAttribute('aria-valuetext', formatTime(slot.start));
     $('.fps-select', view).value = slot.fps;
     $('.fps-select', view).disabled = !canAdjust;
@@ -132,18 +136,17 @@ function render() {
     let info = false;
     if (!error) {
       if (reselect) { text = `Choose “${slot.source.filename}” again to restore this video. Its start point and FPS have been saved. Local videos aren’t uploaded.`; info = true; }
-      else if (slot.ready && !slot.activated) { text = 'One-time Twitch setup: click Play inside this video. Splitframe will pause it at your saved start. Once each Twitch player is connected, use the shared Play button below.'; info = true; }
       else if (slot.status === 'blocked') text = 'Playback did not start. Click Play inside this player once, then click outside the video and retry the shared button or Space. Keep audio muted if the browser still blocks playback.';
       else if (slot.status === 'waiting') { text = 'Waiting for Twitch to start. The playback request is still active. You can use Pause to cancel, or use the Play button inside Twitch if it is waiting for interaction.'; info = true; }
       else if (slot.status === 'offline') text = 'This video is unavailable. Check the original link or choose another recorded video.';
-      else if (slot.source?.kind === 'twitch-clip') { text = 'Twitch clips use their own player controls. For shared play, pause and timestamps, paste a Twitch VOD link instead. Unavailable clips show a message inside Twitch’s player.'; info = true; }
+      else if (slot.source?.kind.startsWith('twitch') && slot.ready) { text = 'Twitch recording ready. Use the shared Play button below, or this video’s own controls.'; info = true; }
 
       else text = '';
     }
     message.textContent = text;
     message.hidden = !text;
     message.classList.toggle('info', info);
-    $('.narrow-twitch-note', view).hidden = !slot.source?.kind.startsWith('twitch');
+    $('.narrow-twitch-note', view).hidden = true;
     updateRates(index);
   });
   const loaded = session.slots.filter(s => s.ready).length;
@@ -153,18 +156,12 @@ function render() {
   const targets = session.controlledSlots;
   const targetLabel = targets.length === 1 ? `run ${session.slots.indexOf(targets[0]) === 0 ? 'A' : 'B'}` : 'both';
   $('#play-both').disabled = !session.active && !session.canPlay;
-  $('#play-both span').textContent = !session.active && session.activationSlots.length ? 'Connect Twitch first' : `${session.active ? 'Pause' : 'Play'} ${targetLabel}`;
+  $('#play-both span').textContent = `${session.active ? 'Pause' : 'Play'} ${targetLabel}`;
   $('#play-both use').setAttribute('href', session.active ? '#i-pause' : '#i-play');
-  $('#play-both').setAttribute('aria-label', !session.active && session.activationSlots.length ? 'Connect Twitch players using their own Play buttons first' : `${session.active ? 'Pause' : 'Play'} ${targetLabel}${targets.length === 1 ? '' : ' videos'}`);
+  $('#play-both').setAttribute('aria-label', `${session.active ? 'Pause' : 'Play'} ${targetLabel}${targets.length === 1 ? '' : ' videos'}`);
   $('#reset-both').disabled = !session.canReset;
   const title = $('#transport-title'), note = $('#transport-note');
-  if (session.activationSlots.length) {
-    title.textContent = 'Connect your Twitch players';
-    note.textContent = 'Click Play inside each Twitch video once. It will pause automatically, then the shared controls unlock.';
-  } else if (session.slots.some(s => s.source && !s.source.control)) {
-    title.textContent = targets.length ? `Shared controls target ${targetLabel}` : 'Independent player controls';
-    note.textContent = 'Twitch clips use their own controls. YouTube, Twitch VODs, X videos and local files can be linked.';
-  } else if (session.slots.some(s => s.status === 'error' || s.status === 'offline')) {
+  if (session.slots.some(s => s.status === 'error' || s.status === 'offline')) {
     title.textContent = 'A video needs attention';
     note.textContent = 'Check the message above and load it again.';
   } else if (session.slots.some(s => s.status === 'blocked')) {
@@ -214,7 +211,6 @@ async function loadVideo(index, raw, preferences = {}) {
 async function mountSource(index, source, preferences = {}, file) {
   const view = views[index];
   const token = session.begin(index, source, preferences);
-  if (source.seekable && source.clamped && preferences.start === undefined) toast('The linked timestamp is beyond 10 minutes. Start point set to 10:00.');
   try {
     const adapter = await createPlayer($('.embed-mount', view), source, {
       start: session.slots[index].start,
@@ -283,7 +279,6 @@ views.forEach((view, index) => {
       toast('Enter a timestamp such as 1:23.500, or a number of seconds.');
       return;
     }
-    if (value > MAX_START) toast('Start points can be set from 0:00 to 10:00.');
     session.setStart(index, value);
     timestamp.value = formatTime(session.slots[index].start);
   }
@@ -306,7 +301,6 @@ views.forEach((view, index) => {
   $('.use-current', view).addEventListener('click', () => {
     try {
       const time = session.slots[index].adapter.time();
-      if (time > MAX_START) toast('Current time is beyond 10 minutes. Start point set to 10:00.');
       session.setStart(index, time);
     } catch { toast('The video isn’t ready yet. Try again in a moment.'); }
   });
