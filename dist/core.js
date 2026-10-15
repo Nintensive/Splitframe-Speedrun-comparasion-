@@ -167,12 +167,12 @@ export class ComparisonSession {
       this.notify();
       return;
     }
-    if (['blocked', 'needs-click'].includes(this.slots[index].status) && ['paused', 'ready'].includes(status)) return;
+    if (this.slots[index].status === 'blocked' && ['paused', 'ready'].includes(status)) return;
     // SDKs can deliver an earlier initialization pause after a new play command.
     if (this.slots[index].pendingPlay && ['paused', 'ready'].includes(status)) return;
-    if (['playing', 'ended', 'blocked', 'needs-click', 'offline', 'error'].includes(status)) this.slots[index].pendingPlay = false;
+    if (['playing', 'ended', 'blocked', 'offline', 'error'].includes(status)) this.slots[index].pendingPlay = false;
     this.slots[index].status = status;
-    if (['blocked', 'needs-click', 'offline', 'error'].includes(status)) {
+    if (['blocked', 'offline', 'error'].includes(status)) {
       this.pause();
       this.slots[index].status = status;
     }

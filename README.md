@@ -36,7 +36,10 @@ Twitch live streams are intentionally unsupported. Paste a recorded
 `twitch.tv/videos/...` link. Twitch setup is explicit: click Play inside each
 Twitch player once. Splitframe confirms actual playback, pauses the player at
 its saved start, and then enables shared Play. This handles the initial player
-activation observed in browser testing without leaving a false buffering state.
+activation observed in browser testing. A delayed response, including a cached
+paused status, keeps the request active; only Twitch’s actual playback-blocked or
+error events stop the comparison. Splitframe no longer cancels playback at an
+eight-second startup deadline.
 The start-point menus sit above the videos, with the shared toolbar directly
 below both players. Shared Play does not scroll the page when pressed.
 Click outside embedded players to send Space and R to Splitframe.

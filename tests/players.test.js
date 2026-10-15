@@ -160,7 +160,7 @@ test('Twitch buffering can exceed seven seconds without pausing either video', a
   assert.equal(states.includes('blocked'), false);
 });
 
-test('an unanswered Twitch Play request reports a native activation step when the SDK confirms it stayed paused', async t => {
+test('an unanswered Twitch Play request keeps waiting when the cached SDK state still says paused', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
   const states = [];
   const { adapter, raw } = await twitchFixture({ onState: state => states.push(state) });
@@ -169,9 +169,11 @@ test('an unanswered Twitch Play request reports a native activation step when th
   adapter.play();
   assert.equal(states.at(-1), 'starting', 'sending a command is not evidence of buffering');
   t.mock.timers.tick(8000);
-  assert.equal(states.at(-1), 'needs-click');
+  assert.equal(states.at(-1), 'waiting');
   assert.equal(states.includes('buffering'), false);
   assert.equal(states.includes('blocked'), false);
+  assert.equal(raw.calls.some(call => call[0] === 'pause'), false);
+  t.mock.timers.tick(12000);
   raw.listeners.playing();
   assert.equal(states.at(-1), 'playing');
 });
@@ -206,7 +208,7 @@ test('two advancing Twitch timestamps confirm playback when PLAYING is missing, 
   assert.equal(states.at(-1), 'paused');
 });
 
-test('a muted retry that silently remains paused also receives the activation prompt', async t => {
+test('a muted retry with a stale paused snapshot does not declare a second playback rejection', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
   const states = [];
   const { adapter, raw } = await twitchFixture({ onState: state => states.push(state) });
@@ -214,7 +216,8 @@ test('a muted retry that silently remains paused also receives the activation pr
   raw.listeners.ready(); await adapter.ready;
   adapter.mute(false); adapter.play(); raw.listeners.blocked();
   t.mock.timers.tick(8000);
-  assert.equal(states.at(-1), 'needs-click');
+  assert.equal(states.at(-1), 'waiting');
+  assert.equal(raw.calls.some(call => call[0] === 'pause'), false);
 });
 
 test('Twitch playback polling keeps an ended VOD finished after earlier timestamps advanced', async t => {

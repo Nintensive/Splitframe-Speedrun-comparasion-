@@ -89,7 +89,7 @@ function updateRates(index) {
 }
 
 function render() {
-  const stateNames = { empty: 'Waiting for video', reselect: 'Choose file again', loading: 'Loading player…', activate: 'Click Twitch Play once', ready: 'Ready', paused: 'Paused', playing: 'Playing', starting: 'Starting…', waiting: 'Waiting for Twitch', 'needs-click': 'Click Twitch Play', buffering: 'Buffering…', manual: 'Own controls', ended: 'Finished', blocked: 'Playback blocked', offline: 'Offline / unavailable', error: 'Couldn’t load' };
+  const stateNames = { empty: 'Waiting for video', reselect: 'Choose file again', loading: 'Loading player…', activate: 'Click Twitch Play once', ready: 'Ready', paused: 'Paused', playing: 'Playing', starting: 'Starting…', waiting: 'Waiting for Twitch', buffering: 'Buffering…', manual: 'Own controls', ended: 'Finished', blocked: 'Playback blocked', offline: 'Offline / unavailable', error: 'Couldn’t load' };
   session.slots.forEach((slot, index) => {
     const view = views[index];
     const hasSource = Boolean(slot.source);
@@ -134,7 +134,7 @@ function render() {
       if (reselect) { text = `Choose “${slot.source.filename}” again to restore this video. Its start point and FPS have been saved. Local videos aren’t uploaded.`; info = true; }
       else if (slot.ready && !slot.activated) { text = 'One-time Twitch setup: click Play inside this video. Splitframe will pause it at your saved start. Once each Twitch player is connected, use the shared Play button below.'; info = true; }
       else if (slot.status === 'blocked') text = 'Playback did not start. Click Play inside this player once, then click outside the video and retry the shared button or Space. Keep audio muted if the browser still blocks playback.';
-      else if (slot.status === 'needs-click' || slot.status === 'waiting') text = 'Twitch has not started the shared Play request. Keep the video visible. Click Play inside Twitch once, pause it, then click outside the video and retry the shared Play button. For two Twitch videos, use a window wide enough to keep both players on screen.';
+      else if (slot.status === 'waiting') { text = 'Waiting for Twitch to start. The playback request is still active. You can use Pause to cancel, or use the Play button inside Twitch if it is waiting for interaction.'; info = true; }
       else if (slot.status === 'offline') text = 'This video is unavailable. Check the original link or choose another recorded video.';
       else if (slot.source?.kind === 'twitch-clip') { text = 'Twitch clips use their own player controls. For shared play, pause and timestamps, paste a Twitch VOD link instead. Unavailable clips show a message inside Twitch’s player.'; info = true; }
 
@@ -167,7 +167,7 @@ function render() {
   } else if (session.slots.some(s => s.status === 'error' || s.status === 'offline')) {
     title.textContent = 'A video needs attention';
     note.textContent = 'Check the message above and load it again.';
-  } else if (session.slots.some(s => ['blocked', 'needs-click'].includes(s.status))) {
+  } else if (session.slots.some(s => s.status === 'blocked')) {
     title.textContent = 'Playback needs a click';
     note.textContent = 'Click inside the blocked player, then try again.';
   } else if (session.slots.some(s => s.status === 'reselect')) {
@@ -178,7 +178,7 @@ function render() {
     note.textContent = 'Ready videos can use the toolbar while the other player loads.';
   } else if (session.slots.some(s => s.status === 'waiting')) {
     title.textContent = 'Waiting for Twitch to start';
-    note.textContent = 'Keep Twitch visible. If it stays paused, try its own Play button once.';
+    note.textContent = 'The request is still active. Pause cancels it; Twitch’s own Play button is also available.';
   } else if (session.slots.some(s => s.status === 'starting')) {
     title.textContent = 'Starting your comparison';
     note.textContent = 'Playback has been requested. Waiting for the videos to start.';

@@ -16,6 +16,6 @@
 
 /* Shared controls follow the two run menus. */
 .transport{position:static;margin-top:20px;margin-bottom:0}
-.player-state[data-status="needs-click"],.player-state[data-status="waiting"]{color:#edba83}
+.player-state[data-status="waiting"]{color:#edba83}
 
 .player-state[data-status="activate"]{color:#edba83}

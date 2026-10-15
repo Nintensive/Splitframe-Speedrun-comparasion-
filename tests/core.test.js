@@ -168,22 +168,23 @@ test('keyboard shortcuts work after toolbar buttons are focused without stealing
   assert.equal(shortcutAction({ key: 'r', ctrlKey: true }, context), null);
 });
 
-test('a confirmed unanswered paused Twitch request stops the pair and recovers after native activation', async () => {
+test('a delayed Twitch response keeps the pair active and accepts a late start', async () => {
   const { session, players } = await loadedPair([vod(), yt()]);
   session.toggle();
   session.state(0, session.slots[0].token, 'starting');
   session.state(1, session.slots[1].token, 'playing');
-  session.state(0, session.slots[0].token, 'needs-click');
-  assert.equal(session.active, false);
-  assert.equal(session.slots[0].pendingPlay, false);
-  assert.equal(players[1].calls.at(-1)[0], 'pause');
-  session.state(0, session.slots[0].token, 'paused');
-  assert.equal(session.slots[0].status, 'needs-click');
-  session.state(0, session.slots[0].token, 'playing');
-  session.state(0, session.slots[0].token, 'paused');
-  session.toggle();
-  assert.equal(players[0].calls.at(-1)[0], 'play');
+  session.state(0, session.slots[0].token, 'waiting');
+  assert.equal(session.active, true);
+  assert.equal(session.slots[0].pendingPlay, true);
   assert.equal(players[1].calls.at(-1)[0], 'play');
+  session.state(0, session.slots[0].token, 'paused');
+  assert.equal(session.slots[0].status, 'waiting');
+  session.state(0, session.slots[0].token, 'playing');
+  assert.equal(session.slots[0].status, 'playing');
+  assert.equal(session.slots[0].pendingPlay, false);
+  session.pause();
+  assert.equal(players[0].calls.at(-1)[0], 'pause');
+  assert.equal(players[1].calls.at(-1)[0], 'pause');
 });
 
 test('synchronous playback rejection does not start the second video alone', async () => {

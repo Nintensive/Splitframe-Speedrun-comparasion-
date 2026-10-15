@@ -360,12 +360,9 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
     if (!playRequested || playAcknowledged) return;
     startupFeedback = setTimeout(() => {
       if (disposed || !playRequested || playAcknowledged) return;
-      // Only stop the comparison if Twitch confirms that it stayed paused.
-      // A slow buffer or unknown state gets guidance and keeps waiting.
-      if (player.isPaused?.() === true) {
-        playRequested = false;
-        setState('needs-click');
-      } else setState('waiting');
+      // isPaused() is a cached SDK snapshot, not a playback rejection. A late
+      // startup must not cancel the pair before Twitch confirms what happened.
+      setState('waiting');
     }, 8000);
   };
   listen('PLAYBACK_BLOCKED', () => {
