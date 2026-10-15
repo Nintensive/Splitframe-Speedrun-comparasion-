@@ -277,6 +277,7 @@ test('the reported VOD uses toolbar and keyboard commands alongside another vide
   const other = { ready: Promise.resolve(), duration: () => 1200, rates: () => [1], mute() {}, time: () => 0, destroy() {},
     play() { calls.push(['play']); session.state(1, otherToken, 'playing'); }, pause() { calls.push(['pause']); }, seek: value => calls.push(['seek', value]) };
   await session.attach(1, otherToken, other);
+  for (const slot of session.slots) { if (!slot.activated) session.state(session.slots.indexOf(slot), slot.token, 'playing'); }
   session.setAudio('both');
   raw.onPlay = () => { if (raw.muted) raw.listeners.playing(); else raw.listeners.blocked(); };
   session.toggle();
@@ -305,6 +306,7 @@ test('two Twitch VODs both recover when sound rejections arrive after the first 
   first.raw.listeners.ready(); second.listeners.ready();
   await session.attach(0, tokens[0], first.adapter);
   await session.attach(1, tokens[1], secondAdapter);
+  for (const slot of session.slots) { if (!slot.activated) session.state(session.slots.indexOf(slot), slot.token, 'playing'); }
   session.setAudio('both');
   session.toggle();
   first.raw.onPlay = () => first.raw.listeners.playing();
@@ -316,25 +318,6 @@ test('two Twitch VODs both recover when sound rejections arrive after the first 
   assert.equal(session.active, true);
   assert.deepEqual(session.slots.map(slot => slot.status), ['playing', 'playing']);
   assert.equal(second.calls.filter(call => call[0] === 'play').length, 2);
-});
-
-test('X posts use the official dark widget and wait until the post is rendered', async () => {
-  const win = environment(); const mount = new Element(); let received;
-  win.twttr = { ready: callback => callback(), widgets: { createTweet(id, parent, options) {
-    received = { id, options }; const widget = new Element('iframe'); parent.append(widget); return Promise.resolve(widget);
-  } } };
-  const adapter = await createPlayer(mount, parseVideoUrl('https://x.com/runner/status/1987654321098765432'));
-  await adapter.ready;
-  assert.equal(received.id, '1987654321098765432'); assert.equal(received.options.theme, 'dark'); assert.equal(received.options.dnt, true);
-  assert.deepEqual(adapter.rates(), []); adapter.destroy(); assert.equal(mount.children.length, 0);
-});
-
-test('a missing or restricted X post reports an error instead of claiming to be loaded', async () => {
-  const win = environment(); const errors = [];
-  win.twttr = { widgets: { createTweet: () => Promise.resolve(undefined) } };
-  const adapter = await createPlayer(new Element(), parseVideoUrl('https://x.com/runner/status/123'), { onError: message => errors.push(message) });
-  await assert.rejects(adapter.ready, /could not be embedded/);
-  assert.match(errors[0], /private, deleted, or restricted/); adapter.destroy();
 });
 
 test('Twitch clip frames use the correct embed URL and require native controls', async () => {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ComparisonSession, localVideoSource, parseVideoUrl } from '../dist/core.js';
-import { createPlayer, localVideoError } from '../dist/players.js';
+import { createPlayer, localVideoError, resolveXVideo } from '../dist/players.js';
 
 class NativeVideo extends EventTarget {
   constructor() {
@@ -21,9 +21,9 @@ class NativeVideo extends EventTarget {
 function environment() {
   const videos = [];
   globalThis.document = {
-    createElement(tag) { assert.equal(tag, 'video', 'A local file must not create an SDK script or remote iframe'); const video = new NativeVideo(); videos.push(video); return video; }
+    createElement(tag) { if (tag === 'div') return { isConnected: true }; assert.equal(tag, 'video', 'A local file must not create an SDK script or remote iframe'); const video = new NativeVideo(); videos.push(video); return video; }
   };
-  return { videos, mount: { replaceChildren(video) { this.child = video; video.mount = this; } } };
+  return { videos, mount: { replaceChildren(video) { if (this.child) this.child.isConnected = false; this.child = video; video.mount = this; video.isConnected = true; } } };
 }
 function file(name = 'my-run.mp4', type = 'video/mp4') {
   return Object.assign(new Blob(['sample video bytes'], { type }), { name, lastModified: 123 });
@@ -95,6 +95,7 @@ test('local playback promise rejection is handled without leaving the paired vid
   env.videos[0].emit('loadedmetadata'); await session.attach(0, token, adapter);
   const remote = remoteAdapter(); const otherToken = session.begin(1, parseVideoUrl('https://twitch.tv/videos/123'));
   await session.attach(1, otherToken, remote);
+  session.state(1, otherToken, 'playing');
   env.videos[0].play = () => Promise.reject(Object.assign(new Error('blocked'), { name: 'NotAllowedError' }));
   session.toggle(); await Promise.resolve(); await Promise.resolve();
   assert.equal(session.slots[0].status, 'blocked'); assert.equal(session.active, false); assert.equal(remote.playing, false);
@@ -123,4 +124,47 @@ test('a direct X MP4 uses the native controllable player without creating or rev
   adapter.seek(5.5); assert.equal(adapter.time(), 5.5);
   adapter.setRate(0.5); assert.equal(video.playbackRate, 0.5);
   adapter.pause(); assert.equal(video.paused, true);
+});
+
+
+test('X post links resolve into the same native player used by local recordings', async t => {
+  const env = environment();
+  globalThis.window = { location: { hostname: 'compare.example', ancestorOrigins: [] } };
+  window.self = window; window.top = window;
+  const source = parseVideoUrl('https://x.com/runner/status/123456789/video/2?t=5');
+  const mediaUrl = 'https://video.twimg.com/ext_tw_video/1/pu/vid/clip.mp4?tag=12';
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, 'https://api.fxtwitter.com/i/status/123456789');
+    assert.equal(options.credentials, 'omit');
+    return { ok: true, status: 200, json: async () => ({ code: 200, tweet: { id: '123456789', media: { videos: [{ url: 'https://video.twimg.com/first.mp4' }, { url: mediaUrl }] } } }) };
+  });
+  const session = new ComparisonSession();
+  const token = session.begin(0, source);
+  const player = await createPlayer(env.mount, source, { onState: state => session.state(0, token, state) });
+  t.after(() => session.clear());
+  assert.equal(env.videos[0].src, mediaUrl);
+  env.videos[0].emit('loadedmetadata'); await session.attach(0, token, player);
+  const other = remoteAdapter(); const b = session.begin(1, parseVideoUrl('https://twitch.tv/videos/123'));
+  await session.attach(1, b, other);
+  session.state(1, b, 'playing');
+  session.toggle(); assert.equal(env.videos[0].paused, false); assert.equal(other.playing, true);
+  session.toggle(); assert.equal(env.videos[0].paused, true); assert.equal(other.playing, false);
+  session.reset(); assert.equal(player.time(), 5);
+  assert.match(session.snapshot().slots[0].url, /x.com.*video\/2/);
+  assert.equal(JSON.stringify(session.snapshot()).includes('video.twimg.com'), false);
+});
+
+test('X lookup rejects unavailable posts, missing videos and untrusted media URLs', async t => {
+  const source = parseVideoUrl('https://x.com/runner/status/123');
+  const responses = [
+    { ok: false, status: 404 },
+    { ok: true, status: 200, json: async () => ({ code: 200, tweet: { id: '123', media: { videos: [] } } }) },
+    { ok: true, status: 200, json: async () => ({ code: 200, tweet: { id: '123', media: { videos: [{ url: 'https://evil.example/run.mp4' }] } } }) },
+    { ok: true, status: 200, json: async () => ({ code: 200, tweet: { id: '456', media: { videos: [] } } }) }
+  ];
+  t.mock.method(globalThis, 'fetch', async () => responses.shift());
+  await assert.rejects(resolveXVideo(source), /private, deleted, or unavailable/);
+  await assert.rejects(resolveXVideo(source), /no playable video/);
+  await assert.rejects(resolveXVideo(source), /supported MP4/);
+  await assert.rejects(resolveXVideo(source), /different post/);
 });

@@ -1,4 +1,4 @@
-import { ComparisonSession, parseVideoUrl, localVideoSource, parseTime, formatTime, shortcutAction, playbackScrollDelta, MAX_START } from './core.js';
+import { ComparisonSession, parseVideoUrl, localVideoSource, parseTime, formatTime, shortcutAction, MAX_START } from './core.js';
 import { createPlayer } from './players.js';
 
 const $ = (selector, parent = document) => parent.querySelector(selector);
@@ -85,11 +85,11 @@ function updateRates(index) {
   }
   selector.disabled = !slot.ready || rates.length < 2;
   selector.value = rates.includes(slot.rate) ? slot.rate : 1;
-  $('.speed-note', view).textContent = slot.source?.kind === 'twitch-vod' ? 'Use Twitch’s player controls' : slot.source?.kind === 'twitch-clip' ? 'Use the clip’s controls' : slot.source?.kind === 'x-post' ? 'Use X’s player controls' : !slot.ready ? 'Load a video to begin' : rates.length < 2 ? 'Normal speed only' : ['local', 'x-video'].includes(slot.source?.kind) ? 'Native video · 0.25–2×' : 'Supported by YouTube';
+  $('.speed-note', view).textContent = slot.source?.kind === 'twitch-vod' ? 'Use Twitch’s player controls' : slot.source?.kind === 'twitch-clip' ? 'Use the clip’s controls' : !slot.ready ? 'Load a video to begin' : rates.length < 2 ? 'Normal speed only' : ['local', 'x-video', 'x-post'].includes(slot.source?.kind) ? 'Native video · 0.25–2×' : 'Supported by YouTube';
 }
 
 function render() {
-  const stateNames = { empty: 'Waiting for video', reselect: 'Choose file again', loading: 'Loading player…', ready: 'Ready', paused: 'Paused', playing: 'Playing', starting: 'Starting…', waiting: 'Waiting for Twitch', 'needs-click': 'Click Twitch Play', buffering: 'Buffering…', manual: 'Own controls', ended: 'Finished', blocked: 'Playback blocked', offline: 'Offline / unavailable', error: 'Couldn’t load' };
+  const stateNames = { empty: 'Waiting for video', reselect: 'Choose file again', loading: 'Loading player…', activate: 'Click Twitch Play once', ready: 'Ready', paused: 'Paused', playing: 'Playing', starting: 'Starting…', waiting: 'Waiting for Twitch', 'needs-click': 'Click Twitch Play', buffering: 'Buffering…', manual: 'Own controls', ended: 'Finished', blocked: 'Playback blocked', offline: 'Offline / unavailable', error: 'Couldn’t load' };
   session.slots.forEach((slot, index) => {
     const view = views[index];
     const hasSource = Boolean(slot.source);
@@ -98,11 +98,11 @@ function render() {
     const local = slot.source?.kind === 'local';
     const reselect = slot.status === 'reselect';
     const canAdjust = hasSource && slot.source.seekable;
-    $('.player-state', view).dataset.status = slot.status;
-    $('.state-text', view).textContent = stateNames[slot.status] || 'Ready';
+    $('.player-state', view).dataset.status = slot.ready && !slot.activated ? 'activate' : slot.status;
+    $('.state-text', view).textContent = slot.ready && !slot.activated ? 'Click Twitch Play once' : stateNames[slot.status] || 'Ready';
     $('.source-type', view).textContent = slot.source?.label.toUpperCase() || 'NO VIDEO LOADED';
     $('.video-shell', view).classList.toggle('twitch', slot.source?.kind.startsWith('twitch') || false);
-    $('.video-shell', view).classList.toggle('x-post', slot.source?.kind === 'x-post');
+
     $('.empty-player', view).hidden = slot.mounted && !error;
     $('.embed-mount', view).hidden = !slot.mounted || error;
     $('.empty-title', view).textContent = error ? 'Video couldn’t load' : reselect ? 'Choose your video again' : loading ? 'Getting your video ready…' : index === 0 ? 'Load your run' : 'Load your reference';
@@ -132,11 +132,12 @@ function render() {
     let info = false;
     if (!error) {
       if (reselect) { text = `Choose “${slot.source.filename}” again to restore this video. Its start point and FPS have been saved. Local videos aren’t uploaded.`; info = true; }
+      else if (slot.ready && !slot.activated) { text = 'One-time Twitch setup: click Play inside this video. Splitframe will pause it at your saved start. Once each Twitch player is connected, use the shared Play button below.'; info = true; }
       else if (slot.status === 'blocked') text = 'Playback did not start. Click Play inside this player once, then click outside the video and retry the shared button or Space. Keep audio muted if the browser still blocks playback.';
       else if (slot.status === 'needs-click' || slot.status === 'waiting') text = 'Twitch has not started the shared Play request. Keep the video visible. Click Play inside Twitch once, pause it, then click outside the video and retry the shared Play button. For two Twitch videos, use a window wide enough to keep both players on screen.';
       else if (slot.status === 'offline') text = 'This video is unavailable. Check the original link or choose another recorded video.';
       else if (slot.source?.kind === 'twitch-clip') { text = 'Twitch clips use their own player controls. For shared play, pause and timestamps, paste a Twitch VOD link instead. Unavailable clips show a message inside Twitch’s player.'; info = true; }
-      else if (slot.source?.kind === 'x-post') { text = 'X posts use their own embedded video controls. The shared button still controls the other supported video. For linked playback and timestamps on an X video, use its direct video.twimg.com MP4 link or choose a local copy.'; info = true; }
+
       else text = '';
     }
     message.textContent = text;
@@ -152,14 +153,17 @@ function render() {
   const targets = session.controlledSlots;
   const targetLabel = targets.length === 1 ? `run ${session.slots.indexOf(targets[0]) === 0 ? 'A' : 'B'}` : 'both';
   $('#play-both').disabled = !session.active && !session.canPlay;
-  $('#play-both span').textContent = `${session.active ? 'Pause' : 'Play'} ${targetLabel}`;
+  $('#play-both span').textContent = !session.active && session.activationSlots.length ? 'Connect Twitch first' : `${session.active ? 'Pause' : 'Play'} ${targetLabel}`;
   $('#play-both use').setAttribute('href', session.active ? '#i-pause' : '#i-play');
-  $('#play-both').setAttribute('aria-label', `${session.active ? 'Pause' : 'Play'} ${targetLabel}${targets.length === 1 ? '' : ' videos'}`);
+  $('#play-both').setAttribute('aria-label', !session.active && session.activationSlots.length ? 'Connect Twitch players using their own Play buttons first' : `${session.active ? 'Pause' : 'Play'} ${targetLabel}${targets.length === 1 ? '' : ' videos'}`);
   $('#reset-both').disabled = !session.canReset;
   const title = $('#transport-title'), note = $('#transport-note');
-  if (session.slots.some(s => s.source && !s.source.control)) {
+  if (session.activationSlots.length) {
+    title.textContent = 'Connect your Twitch players';
+    note.textContent = 'Click Play inside each Twitch video once. It will pause automatically, then the shared controls unlock.';
+  } else if (session.slots.some(s => s.source && !s.source.control)) {
     title.textContent = targets.length ? `Shared controls target ${targetLabel}` : 'Independent player controls';
-    note.textContent = 'X posts and Twitch clips use their own controls. MP4 links, VODs and local files can be linked.';
+    note.textContent = 'Twitch clips use their own controls. YouTube, Twitch VODs, X videos and local files can be linked.';
   } else if (session.slots.some(s => s.status === 'error' || s.status === 'offline')) {
     title.textContent = 'A video needs attention';
     note.textContent = 'Check the message above and load it again.';
@@ -308,19 +312,7 @@ views.forEach((view, index) => {
   });
 });
 
-function togglePlayback() {
-  if (!session.active) {
-    const twitchRects = session.slots.flatMap((slot, index) => {
-      if (!slot.ready || slot.source?.kind !== 'twitch-vod') return [];
-      const frame = $('.embed-mount iframe', views[index]) || $('.video-shell', views[index]);
-      return [frame.getBoundingClientRect()];
-    });
-    const inset = $('.transport').getBoundingClientRect().height + 28;
-    const delta = playbackScrollDelta(twitchRects, window.innerHeight, inset);
-    if (Math.abs(delta) > 1) window.scrollTo({ top: Math.max(0, window.scrollY + delta), behavior: 'instant' });
-  }
-  session.toggle();
-}
+function togglePlayback() { session.toggle(); }
 $('#play-both').addEventListener('click', togglePlayback);
 $('#reset-both').addEventListener('click', () => session.reset());
 $$('input[name="audio"]').forEach(input => input.addEventListener('change', () => session.setAudio(input.value)));

@@ -54,9 +54,10 @@ export function parseVideoUrl(input) {
     return { ...common, kind: 'x-video', id: '', label: 'X video · MP4', url: url.href, control: true, seekable: true };
   }
   if (['x.com', 'twitter.com', 'm.twitter.com', 'mobile.twitter.com'].includes(host)) {
-    const match = url.pathname.match(/^\/(?:[a-z\d_]{1,15}\/status|i\/web\/status|i\/status)\/(\d+)(?:\/(?:video|photo)\/\d+)?\/?$/i);
+    const match = url.pathname.match(/^\/(?:[a-z\d_]{1,15}\/status|i\/web\/status|i\/status)\/(\d+)(?:\/(?:video|photo)\/(\d+))?\/?$/i);
     if (!match) throw new Error('Paste a full X post link that contains a video, such as x.com/runner/status/123456789.');
-    return { ...common, start: 0, kind: 'x-post', id: match[1], label: 'X post', url: `https://x.com/i/web/status/${match[1]}`, control: false, seekable: false };
+    const mediaIndex = Math.max(0, Number(match[2] || 1) - 1);
+    return { ...common, kind: 'x-post', id: match[1], mediaIndex, label: 'X video', url: `https://x.com/i/web/status/${match[1]}${mediaIndex ? `/video/${mediaIndex + 1}` : ''}`, control: true, seekable: true };
   }
   const ytHosts = ['youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtube-nocookie.com'];
   if (host === 'youtu.be' || ytHosts.includes(host)) {
@@ -93,19 +94,8 @@ export function shortcutAction(event, { canPlay = false, canReset = false, activ
   return 'toggle';
 }
 
-// Twitch checks viewport visibility before accepting programmatic Play.
-// Leave room for the sticky toolbar so it never covers a revealed player.
-export function playbackScrollDelta(rects, viewportHeight, topInset = 0) {
-  if (!rects.length || viewportHeight <= 0) return 0;
-  const top = Math.min(...rects.map(rect => rect.top));
-  const bottom = Math.max(...rects.map(rect => rect.bottom));
-  const inset = Math.max(0, topInset);
-  if (top >= inset && bottom <= viewportHeight - 16) return 0;
-  return top - inset;
-}
-
 export function emptySlot() {
-  return { source: null, adapter: null, token: 0, status: 'empty', start: 0, fps: 60, rate: 1, error: '', ready: false, mounted: false, pendingPlay: false };
+  return { source: null, adapter: null, token: 0, status: 'empty', start: 0, fps: 60, rate: 1, error: '', ready: false, mounted: false, pendingPlay: false, activated: true };
 }
 
 export function localVideoSource(file) {
@@ -127,14 +117,15 @@ export class ComparisonSession {
   }
   notify() { this.onChange(this); }
   get controlledSlots() { return this.slots.filter(s => s.ready && s.source?.control && !['error', 'offline', 'loading'].includes(s.status)); }
-  get canPlay() { return this.controlledSlots.length > 0; }
+  get activationSlots() { return this.controlledSlots.filter(s => !s.activated); }
+  get canPlay() { return this.controlledSlots.length > 0 && this.activationSlots.length === 0; }
   get canReset() { return this.controlledSlots.some(s => s.source.seekable); }
   get active() { return this.intent || this.slots.some(s => ['playing', 'buffering'].includes(s.status)); }
   begin(index, source, preferences = {}) {
     this.pause();
     const previous = this.slots[index];
     previous.adapter?.destroy();
-    const slot = { ...emptySlot(), source, token: previous.token + 1, status: 'loading', start: clampStart(preferences.start ?? source.start), fps: FPS_OPTIONS.includes(preferences.fps) ? preferences.fps : 60 };
+    const slot = { ...emptySlot(), source, token: previous.token + 1, activated: source.kind !== 'twitch-vod', status: 'loading', start: clampStart(preferences.start ?? source.start), fps: FPS_OPTIONS.includes(preferences.fps) ? preferences.fps : 60 };
     if (!source.seekable) slot.start = 0;
     this.slots[index] = slot;
     this.notify();
@@ -149,7 +140,7 @@ export class ComparisonSession {
       if (!this.isCurrent(index, token)) return;
       const slot = this.slots[index];
       slot.ready = true;
-      if (!['error', 'offline'].includes(slot.status)) slot.status = slot.source.control ? 'ready' : 'manual';
+      if (!['error', 'offline'].includes(slot.status)) slot.status = !slot.activated ? 'activate' : slot.source.control ? 'ready' : 'manual';
       slot.start = clampStart(slot.start, adapter.duration());
       this.applyAudio();
       if (slot.source.seekable && slot.start > 0) adapter.seek(slot.start);
@@ -162,6 +153,20 @@ export class ComparisonSession {
   state(index, token, status) {
     if (!this.isCurrent(index, token)) return;
     if (this.slots[index].status === 'error') return;
+    const slot = this.slots[index];
+    if (!slot.activated && status === 'playing') {
+      // A real first playback confirms Twitch accepted the user's in-frame
+      // gesture. Pause at the saved start before linking the comparison.
+      slot.activated = true;
+      this.pause();
+      if (slot.ready) {
+        slot.adapter.seek(clampStart(slot.start, slot.adapter.duration()));
+        slot.adapter.pause();
+      }
+      slot.status = 'paused';
+      this.notify();
+      return;
+    }
     if (['blocked', 'needs-click'].includes(this.slots[index].status) && ['paused', 'ready'].includes(status)) return;
     // SDKs can deliver an earlier initialization pause after a new play command.
     if (this.slots[index].pendingPlay && ['paused', 'ready'].includes(status)) return;

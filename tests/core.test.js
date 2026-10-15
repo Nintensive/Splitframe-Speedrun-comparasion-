@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseVideoUrl, parseTime, formatTime, shortcutAction, playbackScrollDelta, ComparisonSession } from '../dist/core.js';
+import { parseVideoUrl, parseTime, formatTime, shortcutAction, ComparisonSession } from '../dist/core.js';
 
 const YT_ID = 'M7lc1UVf-VE';
 const yt = () => parseVideoUrl(`https://youtube.com/watch?v=${YT_ID}`);
@@ -24,6 +24,7 @@ async function loadedPair(sources = [yt(), vod()], starts = [12.345, 34.567]) {
   for (let index = 0; index < 2; index++) {
     const token = session.begin(index, sources[index], { start: starts[index] });
     await session.attach(index, token, players[index]);
+    if (sources[index].kind === 'twitch-vod') session.state(index, token, 'playing');
   }
   players.forEach(p => p.calls.length = 0);
   return { session, players };
@@ -131,11 +132,11 @@ test('player errors pause the other run and late provider states cannot hide the
   assert.equal(players[1].calls.at(-1)[0], 'pause'); assert.equal(session.slots[0].status, 'error');
 });
 
-test('X and Twitter post aliases preserve the exact post ID and use independent controls', () => {
+test('X and Twitter post aliases preserve the exact post ID and enable shared playback', () => {
   const id = '1987654321098765432';
   for (const url of [`https://x.com/runner/status/${id}`, `https://twitter.com/runner/status/${id}/video/1?s=20`, `https://x.com/i/web/status/${id}`, `https://mobile.twitter.com/runner/status/${id}`]) {
     const source = parseVideoUrl(url);
-    assert.equal(source.id, id); assert.equal(source.kind, 'x-post'); assert.equal(source.control, false);
+    assert.equal(source.id, id); assert.equal(source.kind, 'x-post'); assert.equal(source.control, true); assert.equal(source.seekable, true);
   }
   assert.throws(() => parseVideoUrl('https://x.com/runner'), /full X post link/);
 });
@@ -165,16 +166,6 @@ test('keyboard shortcuts work after toolbar buttons are focused without stealing
   for (const tagName of ['INPUT', 'TEXTAREA', 'SELECT', 'VIDEO', 'IFRAME']) assert.equal(shortcutAction({ code: 'Space', key: ' ', target: { tagName } }, context), null);
   assert.equal(shortcutAction({ code: 'Space', key: ' ', target: { tagName: 'BUTTON', dataset: { nativeSpace: 'true' } } }, context), null);
   assert.equal(shortcutAction({ key: 'r', ctrlKey: true }, context), null);
-});
-
-test('shared Play reveals offscreen Twitch frames without letting the toolbar cover them', () => {
-  const rects = [{ top: -480, bottom: -180 }, { top: -480, bottom: -180 }];
-  const delta = playbackScrollDelta(rects, 900, 120);
-  assert.equal(delta, -600);
-  assert.equal(rects[0].top - delta, 120);
-  assert.equal(playbackScrollDelta([{ top: 450, bottom: 750 }], 700, 120), 330);
-  assert.equal(playbackScrollDelta([{ top: 140, bottom: 440 }], 700, 120), 0);
-  assert.equal(playbackScrollDelta([], 700, 120), 0);
 });
 
 test('a confirmed unanswered paused Twitch request stops the pair and recovers after native activation', async () => {
@@ -212,4 +203,21 @@ test('speed and audio commands follow capabilities and requested source', async 
   session.setAudio('b'); assert.deepEqual(players[0].calls.at(-1), ['mute', true]); assert.deepEqual(players[1].calls.at(-1), ['mute', false]);
   const snapshot = session.snapshot(); assert.equal(snapshot.slots[0].start, 12.345); assert.equal(snapshot.audio, 'b');
   session.clear(); assert.equal(session.canPlay, false); assert.equal(session.slots[0].source, null); assert.equal(players[0].calls.at(-1)[0], 'destroy');
+});
+
+
+test('Twitch activation gates shared Play and returns each first native playback to its saved start', async () => {
+  const session = new ComparisonSession();
+  const first = adapter(), second = adapter();
+  const a = session.begin(0, vod(), { start: 10 }); await session.attach(0, a, first);
+  const b = session.begin(1, vod(), { start: 20 }); await session.attach(1, b, second);
+  assert.equal(session.canPlay, false); assert.equal(session.activationSlots.length, 2);
+  first.calls.length = 0; second.calls.length = 0;
+  session.toggle(); assert.equal(first.calls.length, 0);
+  session.state(0, a, 'playing');
+  assert.equal(first.current, 10); assert.equal(session.active, false); assert.equal(session.canPlay, false);
+  session.state(1, b, 'playing');
+  assert.equal(second.current, 20); assert.equal(session.canPlay, true);
+  session.toggle();
+  assert.equal(first.calls.at(-1)[0], 'play'); assert.equal(second.calls.at(-1)[0], 'play');
 });

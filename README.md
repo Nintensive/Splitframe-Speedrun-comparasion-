@@ -29,31 +29,25 @@ events inside another site's iframe cannot reach the comparison page.
 | YouTube videos | Yes | Yes | Available rates |
 | Twitch VODs | Yes | Yes | Native player only |
 | Twitch clips | Own player controls | No | Native player only |
-| X / Twitter post links | Own player controls | No | Native player only |
+| X / Twitter video posts | Yes | Yes | 0.25–2× |
 | Direct video.twimg.com MP4 links | Yes | Yes | 0.25–2× |
 
 Twitch live streams are intentionally unsupported. Paste a recorded
-`twitch.tv/videos/...` link. Shared controls wait for the VOD metadata and retry
-an unanswered first play command once. The toolbar sits above the players and
-stays reachable as you scroll. Play and Space bring Twitch players into view;
-Twitch can ignore API playback requests when the embed is outside the viewport.
-Keep both Twitch players visible during a comparison.
+`twitch.tv/videos/...` link. Twitch setup is explicit: click Play inside each
+Twitch player once. Splitframe confirms actual playback, pauses the player at
+its saved start, and then enables shared Play. This handles the initial player
+activation observed in browser testing without leaving a false buffering state.
+The toolbar is below the run menus and does not jump the page when pressed.
+Click outside embedded players to send Space and R to Splitframe.
 
-If Twitch blocks playback with sound,
-Splitframe retries muted and updates the audio selector. Slow buffering does
-not stop playback. An unanswered Play request shows Starting instead of assuming
-buffering. After eight seconds, if Twitch confirms it remained paused, the pair
-pauses with a prompt to activate Twitch's own Play button once. Unpaused or unknown
-states keep waiting without a forced stop. Advancing timestamps can confirm
-playback if the SDK misses a Playing event. Click inside Twitch before enabling
-audio if your browser requires it. If prompted, start Twitch inside its player,
-pause it, click outside the iframe, and retry the shared controls.
-
-A source with independent controls does not disable toolbar controls for the
-other video. To link playback for footage from an X post, use its direct HTTPS
-`video.twimg.com` MP4 URL or load a local recording. Public post embeds preserve
-X's attribution and native player; private, deleted, or restricted posts may
-not be embeddable. No platform API keys are required.
+X post URLs resolve public video metadata through the [FxEmbed Status API](https://github.com/FxEmbed/FxEmbed/wiki/Status-Fetch-API).
+The video plays in a native player with shared play/pause, timestamps, reset and
+speed controls. The original X link remains available for attribution, and saved
+sessions retain that post URL rather than an expiring CDN link. The lookup sends
+only the post ID, without credentials. It accepts HTTPS MP4 media only from
+`video.twimg.com`. Private, deleted, non-video or unavailable posts show an error.
+The lookup service is an external dependency; it needs no API key. Only Twitch
+clips use independent controls.
 
 Start points range from 0 to 600 seconds; full videos remain playable.
 Frame buttons request a fractional-second seek using the selected FPS.
@@ -86,7 +80,7 @@ npm test
 The tests cover URL formats, shared and partial playback, independent resets,
 frame boundaries, keyboard focus, delayed SDK events, file lifecycle, X widget
 rendering failures, Twitch readiness, muted recovery, delayed buffering,
-cancelled retries, viewport alignment, unanswered requests, state reconciliation,
+cancelled retries, Twitch activation, unanswered requests, state reconciliation, X video resolution,
 and provider API commands. Provider and media doubles are
 used, so passing tests do not establish real network playback in a browser.
 

@@ -152,6 +152,35 @@ export function createLocalPlayer(mount, file, options = {}) {
   return createMediaPlayer(mount, objectUrl, { ...options, label: `Local video: ${file.name}`, local: true, release: () => URL.revokeObjectURL(objectUrl) });
 }
 
+export async function resolveXVideo(source) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    // Public-post metadata, using the same service as the reference tool.
+    const response = await fetch(`https://api.fxtwitter.com/i/status/${source.id}`, {
+      signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer'
+    });
+    if ([401, 403, 404].includes(response.status)) throw new Error('This X post is private, deleted, or unavailable. Try a public video post or choose a local copy.');
+    if (!response.ok) throw new Error('X video lookup is temporarily unavailable. Press Load to retry.');
+    const data = await response.json();
+    if ([401, 403, 404].includes(data.code)) throw new Error('This X post is private, deleted, or unavailable. Try a public video post or choose a local copy.');
+    if (data.code !== 200 || !data.tweet) throw new Error('X video lookup is temporarily unavailable. Press Load to retry.');
+    if (data.tweet.id && String(data.tweet.id) !== source.id) throw new Error('X returned a different post. Check the link and try again.');
+    const video = data.tweet.media?.videos?.[source.mediaIndex || 0];
+    if (!video?.url) throw new Error('This X post has no playable video at that position. Choose a video post or a local copy.');
+    let url;
+    try { url = new URL(video.url); } catch { throw new Error('X did not return a usable video link. Try another post.'); }
+    if (url.protocol !== 'https:' || url.hostname !== 'video.twimg.com' || url.port || url.username || url.password || !/\.mp4$/i.test(url.pathname)) {
+      throw new Error('X did not return a supported MP4 video. Choose another post or a local copy.');
+    }
+    return url.href;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('X video lookup timed out. Press Load to retry.');
+    if (error instanceof TypeError) throw new Error('Couldn’t reach the X video lookup service. Check your connection or content blocker and press Load.');
+    throw error;
+  } finally { clearTimeout(timeout); }
+}
+
 export async function createPlayer(mount, source, { start = 0, file, onState = () => {}, onError = () => {}, onRate = () => {}, onMount = () => {}, onMutedFallback = () => {} } = {}) {
   if (source.kind === 'local') return createLocalPlayer(mount, file, { onState, onError, onRate, onMount });
   if (source.kind === 'x-video') return createMediaPlayer(mount, source.url, { label: 'X MP4 video player', onState, onError, onRate, onMount });
@@ -163,22 +192,9 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
   mount.replaceChildren(inner);
   onMount();
   if (source.kind === 'x-post') {
-    await sdk('x');
+    const mediaUrl = await resolveXVideo(source);
     if (!inner.isConnected) throw new Error('Video load was replaced.');
-    let settled = false, resolveReady, rejectReady;
-    const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
-    ready.catch(() => {});
-    const fail = message => {
-      if (disposed || settled) return;
-      settled = true; clearTimeout(timeout); rejectReady(new Error(message)); emit(onError, message);
-    };
-    const timeout = setTimeout(() => fail('X took too long to render this post. Check your connection or content blocker, then press Load again.'), 25000);
-    Promise.resolve().then(() => window.twttr.widgets.createTweet(source.id, inner, { theme: 'dark', align: 'center', conversation: 'none', dnt: true })).then(widget => {
-      if (disposed || settled) { widget?.remove(); return; }
-      if (!widget) { fail('This X post could not be embedded. It may be private, deleted, or restricted. Open the original or choose a local copy.'); return; }
-      settled = true; clearTimeout(timeout); resolveReady();
-    }).catch(() => fail('X couldn’t display this post. Check the original link or choose a local copy.'));
-    return { ready, play() {}, pause() {}, seek() {}, mute() {}, rates: () => [], setRate() {}, time: () => 0, duration: () => 0, destroy() { disposed = true; clearTimeout(timeout); if (!settled) { settled = true; resolveReady(); } inner.remove(); } };
+    return createMediaPlayer(mount, mediaUrl, { label: 'X video player', onState, onError, onRate, onMount });
   }
   if (source.kind === 'twitch-clip') {
     const iframe = document.createElement('iframe');
