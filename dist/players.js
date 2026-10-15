@@ -181,9 +181,26 @@ export async function resolveXVideo(source) {
   } finally { clearTimeout(timeout); }
 }
 
+async function fetchXVideo(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90000);
+  try {
+    // X's CDN can reject third-party Referer headers. Fetch a browser-local
+    // copy with an explicit policy, without changing YouTube/Twitch referrers.
+    const response = await fetch(url, { signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer' });
+    if (!response.ok) throw new Error(`X returned HTTP ${response.status} for this video. Press Load to retry, or choose a local copy.`);
+    const blob = await response.blob();
+    if (!blob.size || (blob.type && !/^(video\/|application\/octet-stream)/i.test(blob.type))) throw new Error('X did not return a playable video file. Try another video post.');
+    return blob;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('The X video download timed out. Press Load to retry, or choose a local copy.');
+    if (error instanceof TypeError) throw new Error('Couldn’t download this X video. Check your connection or content blocker, then press Load.');
+    throw error;
+  } finally { clearTimeout(timeout); }
+}
+
 export async function createPlayer(mount, source, { start = 0, file, onState = () => {}, onError = () => {}, onRate = () => {}, onMount = () => {}, onMutedFallback = () => {} } = {}) {
   if (source.kind === 'local') return createLocalPlayer(mount, file, { onState, onError, onRate, onMount });
-  if (source.kind === 'x-video') return createMediaPlayer(mount, source.url, { label: 'X MP4 video player', onState, onError, onRate, onMount });
   let disposed = false;
   const emit = (callback, value) => { if (!disposed) callback(value); };
   const parents = twitchParents(window.location, Array.from(window.location.ancestorOrigins || []), document.referrer, window.self !== window.top);
@@ -191,10 +208,12 @@ export async function createPlayer(mount, source, { start = 0, file, onState = (
   inner.id = `embed-${crypto.randomUUID()}`;
   mount.replaceChildren(inner);
   onMount();
-  if (source.kind === 'x-post') {
-    const mediaUrl = await resolveXVideo(source);
+  if (['x-post', 'x-video'].includes(source.kind)) {
+    const mediaUrl = source.kind === 'x-post' ? await resolveXVideo(source) : source.url;
+    const blob = await fetchXVideo(mediaUrl);
     if (!inner.isConnected) throw new Error('Video load was replaced.');
-    return createMediaPlayer(mount, mediaUrl, { label: 'X video player', onState, onError, onRate, onMount });
+    const objectUrl = URL.createObjectURL(blob);
+    return createMediaPlayer(mount, objectUrl, { label: 'X video player', release: () => URL.revokeObjectURL(objectUrl), onState, onError, onRate, onMount });
   }
   if (source.kind === 'twitch-clip') {
     const iframe = document.createElement('iframe');

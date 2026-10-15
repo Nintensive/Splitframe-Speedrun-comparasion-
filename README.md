@@ -37,12 +37,15 @@ Twitch live streams are intentionally unsupported. Paste a recorded
 Twitch player once. Splitframe confirms actual playback, pauses the player at
 its saved start, and then enables shared Play. This handles the initial player
 activation observed in browser testing without leaving a false buffering state.
-The toolbar is below the run menus and does not jump the page when pressed.
+The start-point menus sit above the videos, with the shared toolbar directly
+below both players. Shared Play does not scroll the page when pressed.
 Click outside embedded players to send Space and R to Splitframe.
 
 X post URLs resolve public video metadata through the [FxEmbed Status API](https://github.com/FxEmbed/FxEmbed/wiki/Status-Fetch-API).
-The video plays in a native player with shared play/pause, timestamps, reset and
-speed controls. The original X link remains available for attribution, and saved
+The media downloads without a third-party referrer and plays through a temporary
+browser-local URL, with shared play/pause, timestamps, reset and speed controls.
+Large X videos take longer to load; replacing a run releases its temporary URL.
+The original X link remains available for attribution, and saved
 sessions retain that post URL rather than an expiring CDN link. The lookup sends
 only the post ID, without credentials. It accepts HTTPS MP4 media only from
 `video.twimg.com`. Private, deleted, non-video or unavailable posts show an error.
@@ -78,9 +81,10 @@ npm test
 ```
 
 The tests cover URL formats, shared and partial playback, independent resets,
-frame boundaries, keyboard focus, delayed SDK events, file lifecycle, X widget
-rendering failures, Twitch readiness, muted recovery, delayed buffering,
-cancelled retries, Twitch activation, unanswered requests, state reconciliation, X video resolution,
+frame boundaries, keyboard focus, delayed SDK events, file lifecycle, X lookup
+and media failures, Twitch readiness, muted recovery, delayed buffering,
+cancelled retries, Twitch activation, unanswered requests, state reconciliation,
+X video resolution and referrer-free downloads,
 and provider API commands. Provider and media doubles are
 used, so passing tests do not establish real network playback in a browser.
 

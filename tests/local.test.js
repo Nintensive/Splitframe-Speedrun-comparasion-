@@ -114,16 +114,27 @@ test('saved local sessions contain only file metadata and retain start/FPS for r
   assert.equal(session.canPlay, false);
 });
 
-test('a direct X MP4 uses the native controllable player without creating or revoking a local URL', async t => {
+test('a direct X MP4 fetches without a third-party referrer and releases its browser-local copy', async t => {
   const env = environment(); const source = parseVideoUrl('https://video.twimg.com/ext_tw_video/123/pu/vid/run.mp4?tag=12');
+  globalThis.window = { location: { hostname: 'compare.example', ancestorOrigins: [] } };
+  window.self = window; window.top = window;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, source.url);
+    assert.equal(options.credentials, 'omit'); assert.equal(options.referrerPolicy, 'no-referrer');
+    return { ok: true, status: 200, blob: async () => file() };
+  });
+  const revoked = [];
+  const originalRevoke = URL.revokeObjectURL.bind(URL);
+  t.mock.method(URL, 'revokeObjectURL', url => { revoked.push(url); originalRevoke(url); });
   const adapter = await createPlayer(env.mount, source);
   t.after(() => adapter.destroy());
-  const video = env.videos[0]; assert.equal(video.src, source.url);
+  const video = env.videos[0], objectUrl = video.src; assert.match(objectUrl, /^blob:/);
   video.emit('loadedmetadata'); await adapter.ready;
   adapter.play(); assert.equal(video.paused, false);
   adapter.seek(5.5); assert.equal(adapter.time(), 5.5);
   adapter.setRate(0.5); assert.equal(video.playbackRate, 0.5);
   adapter.pause(); assert.equal(video.paused, true);
+  adapter.destroy(); adapter.destroy(); assert.deepEqual(revoked, [objectUrl]);
 });
 
 
@@ -134,15 +145,16 @@ test('X post links resolve into the same native player used by local recordings'
   const source = parseVideoUrl('https://x.com/runner/status/123456789/video/2?t=5');
   const mediaUrl = 'https://video.twimg.com/ext_tw_video/1/pu/vid/clip.mp4?tag=12';
   t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(options.credentials, 'omit'); assert.equal(options.referrerPolicy, 'no-referrer');
+    if (url === mediaUrl) return { ok: true, status: 200, blob: async () => file() };
     assert.equal(url, 'https://api.fxtwitter.com/i/status/123456789');
-    assert.equal(options.credentials, 'omit');
     return { ok: true, status: 200, json: async () => ({ code: 200, tweet: { id: '123456789', media: { videos: [{ url: 'https://video.twimg.com/first.mp4' }, { url: mediaUrl }] } } }) };
   });
   const session = new ComparisonSession();
   const token = session.begin(0, source);
   const player = await createPlayer(env.mount, source, { onState: state => session.state(0, token, state) });
   t.after(() => session.clear());
-  assert.equal(env.videos[0].src, mediaUrl);
+  assert.match(env.videos[0].src, /^blob:/);
   env.videos[0].emit('loadedmetadata'); await session.attach(0, token, player);
   const other = remoteAdapter(); const b = session.begin(1, parseVideoUrl('https://twitch.tv/videos/123'));
   await session.attach(1, b, other);
@@ -152,6 +164,24 @@ test('X post links resolve into the same native player used by local recordings'
   session.reset(); assert.equal(player.time(), 5);
   assert.match(session.snapshot().slots[0].url, /x.com.*video\/2/);
   assert.equal(JSON.stringify(session.snapshot()).includes('video.twimg.com'), false);
+  assert.equal(JSON.stringify(session.snapshot()).includes('blob:'), false);
+});
+
+test('X media fetch failures and replaced loads never create an active video', async t => {
+  const env = environment(), source = parseVideoUrl('https://video.twimg.com/test.mp4');
+  globalThis.window = { location: { hostname: 'compare.example', ancestorOrigins: [] } };
+  window.self = window; window.top = window;
+  const responses = [{ ok: false, status: 403 }, { ok: true, blob: async () => new Blob(['error'], { type: 'text/html' }) }];
+  t.mock.method(globalThis, 'fetch', async () => responses.shift());
+  await assert.rejects(createPlayer(env.mount, source), /HTTP 403/);
+  await assert.rejects(createPlayer(env.mount, source), /playable video file/);
+  let finish;
+  globalThis.fetch = async () => ({ ok: true, blob: () => new Promise(resolve => { finish = resolve; }) });
+  const pending = createPlayer(env.mount, source);
+  await Promise.resolve();
+  env.mount.replaceChildren({}); finish(file());
+  await assert.rejects(pending, /replaced/);
+  assert.equal(env.videos.length, 0);
 });
 
 test('X lookup rejects unavailable posts, missing videos and untrusted media URLs', async t => {
